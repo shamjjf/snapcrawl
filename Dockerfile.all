@@ -3,13 +3,11 @@
 #
 # EasyPanel setup:
 #   Build method: Dockerfile, file path "Dockerfile.all".
-#   Two domains on the same service:
-#     panel domain → port 3000   (Next.js)
-#     api   domain → port 4000   (Express; do NOT set PORT, 4000 is the default)
-#   Env vars (before first build — NEXT_PUBLIC_* bake in at build time):
-#     NEXT_PUBLIC_API_URL      = https://<api-domain>
-#     NEXT_PUBLIC_USE_FIXTURES = false
-#     JWT_SECRET, MONGODB_URI, WEB_ORIGIN=https://<panel-domain>, S3_* as usual
+#   ONE domain → port 3000. The panel serves the UI and proxies /api/v1/* to
+#   the API process inside the same container (see rewrites in
+#   apps/web/next.config.mjs), so the API needs no public domain of its own.
+#   (Optional: a second domain → port 4000 exposes the API directly.)
+#   Env vars: JWT_SECRET, MONGODB_URI, S3_*, WEB_ORIGIN=https://<domain>.
 #
 # Trade-off vs Dockerfile / Dockerfile.web: one service to manage, but every
 # deploy rebuilds the panel too, and if either process dies the whole
@@ -18,10 +16,10 @@ FROM node:24-alpine
 
 WORKDIR /app
 
-ARG NEXT_PUBLIC_API_URL
-ARG NEXT_PUBLIC_USE_FIXTURES=false
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
-    NEXT_PUBLIC_USE_FIXTURES=$NEXT_PUBLIC_USE_FIXTURES \
+# NEXT_PUBLIC_API_URL="" → the panel calls /api/v1/* on its own origin and
+# next.config.mjs rewrites forward it to the API on localhost:4000.
+ENV NEXT_PUBLIC_API_URL="" \
+    NEXT_PUBLIC_USE_FIXTURES=false \
     NODE_ENV=production
 
 # Dependency layer — root workspace included for `concurrently`.
