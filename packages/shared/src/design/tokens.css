@@ -1,0 +1,400 @@
+/**
+ * SnapCrawl design tokens — single source of truth for color, type, space,
+ * radius, elevation, motion, z-index, and breakpoints across apps/web and
+ * apps/extension. See docs/DESIGN.md for the full guide.
+ *
+ * Two tiers:
+ *   1. Primitives (--az-*, --slate-*, --green-* …): the raw scale. Never
+ *      reference these directly in components.
+ *   2. Semantic (--color-*, --text-*, --space-* …): what components use.
+ *      These re-map per theme; primitives do not change.
+ *
+ * Theming: light is the default. Dark applies automatically under
+ * `prefers-color-scheme: dark`, and can be forced either way with
+ * `data-theme="dark"` / `data-theme="light"` on <html> (the toggle wins).
+ *
+ * All foreground/background pairs are WCAG 2.1 AA validated (text ≥ 4.5:1,
+ * UI ≥ 3:1). Do not hand-edit color values without re-running the contrast
+ * check documented in docs/DESIGN.md.
+ */
+
+:root {
+  /* ─── Primitive palette ─────────────────────────────────────────── */
+
+  /* Azure (brand) — anchor 600 = #0B6BCB */
+  --az-50: #ecf5ff;
+  --az-100: #d6e9ff;
+  --az-200: #afd3ff;
+  --az-300: #93c5fd;
+  --az-400: #3d93f2;
+  --az-500: #1478e0;
+  --az-600: #0b6bcb;
+  --az-700: #0a57a6;
+  --az-800: #0c4884;
+  --az-900: #0e3a69;
+  --az-950: #0b2545;
+
+  /* Slate (neutral) */
+  --slate-0: #ffffff;
+  --slate-50: #f8fafc;
+  --slate-100: #f1f5f9;
+  --slate-200: #e2e8f0;
+  --slate-300: #cbd5e1;
+  --slate-400: #94a3b8;
+  --slate-500: #64748b;
+  --slate-600: #475569;
+  --slate-700: #334155;
+  --slate-800: #1e293b;
+  --slate-900: #0f172a;
+  --slate-950: #0b1220;
+  --slate-border-l: #8290a6; /* light interactive/input border, 3.24:1 on #fff */
+  --slate-subtle-d: #808fa6; /* dark subtle text, 5.44:1 on surface */
+
+  /* Green (success) */
+  --green-50: #f0fdf4;
+  --green-300: #86efac;
+  --green-400: #4ade80;
+  --green-600: #16a34a;
+  --green-700: #15803d;
+  --green-950: #052e16;
+
+  /* Amber (warning) */
+  --amber-50: #fffbeb;
+  --amber-300: #fcd34d;
+  --amber-400: #fbbf24;
+  --amber-600: #d97706;
+  --amber-700: #b45309;
+  --amber-950: #2a1a05;
+
+  /* Red (danger) */
+  --red-50: #fef2f2;
+  --red-300: #fca5a5;
+  --red-400: #f87171;
+  --red-600: #dc2626;
+  --red-700: #b91c1c;
+  --red-950: #2a0e0e;
+
+  /* Teal (secondary accent — substate edges/nodes) */
+  --teal-400: #2dd4bf;
+  --teal-600: #0d9488;
+
+  /* ─── Semantic tokens — LIGHT (default) ─────────────────────────── */
+
+  /* Surfaces */
+  --color-bg: var(--slate-50);
+  --color-surface: var(--slate-0);
+  --color-surface-2: var(--slate-100);
+  --color-surface-3: var(--slate-200);
+
+  /* Borders */
+  --color-border: var(--slate-200); /* decorative dividers (WCAG-exempt) */
+  --color-border-strong: var(--slate-300);
+  --color-border-interactive: var(--slate-border-l); /* input/control outlines */
+
+  /* Text */
+  --color-text: var(--slate-900);
+  --color-text-muted: var(--slate-600);
+  --color-text-subtle: var(--slate-500);
+  --color-text-inverse: var(--slate-0);
+
+  /* Primary (brand fill — buttons; white text both themes) */
+  --color-primary: var(--az-600);
+  --color-primary-hover: var(--az-700);
+  --color-primary-active: var(--az-800);
+  --color-on-primary: var(--slate-0);
+  /* Primary as text/icon/link on a surface */
+  --color-primary-text: var(--az-600);
+  --color-primary-subtle-bg: var(--az-50);
+  --color-primary-subtle-text: var(--az-800);
+
+  /* Focus & links */
+  --color-focus-ring: var(--az-500);
+  --color-link: var(--az-600);
+
+  /* Status: success / warning / danger / info */
+  --color-success: var(--green-600);
+  --color-success-subtle-bg: var(--green-50);
+  --color-success-subtle-text: var(--green-700);
+  --color-warning: var(--amber-600);
+  --color-warning-subtle-bg: var(--amber-50);
+  --color-warning-subtle-text: var(--amber-700);
+  --color-danger: var(--red-600);
+  --color-danger-subtle-bg: var(--red-50);
+  --color-danger-subtle-text: var(--red-700);
+  --color-danger-emphasis: var(--red-600); /* solid destructive fill (buttons) — stable in BOTH themes; white text = 4.83:1 */
+  --color-on-danger: var(--slate-0);
+  --color-info: var(--az-600);
+  --color-info-subtle-bg: var(--az-50);
+  --color-info-subtle-text: var(--az-800);
+  --color-accent: var(--teal-600);
+
+  /* Crawler session-status (chip fill uses *-subtle-bg + *-subtle-text; the
+     dot uses *-dot). Mapped to semantics: running=primary, paused=warning,
+     completed=success, failed=danger, pending/cancelled=neutral. */
+  --status-pending-bg: var(--slate-100);
+  --status-pending-text: var(--slate-600);
+  --status-pending-dot: var(--slate-400);
+  --status-running-bg: var(--az-50);
+  --status-running-text: var(--az-800);
+  --status-running-dot: var(--az-600);
+  --status-paused-bg: var(--amber-50);
+  --status-paused-text: var(--amber-700);
+  --status-paused-dot: var(--amber-600);
+  --status-completed-bg: var(--green-50);
+  --status-completed-text: var(--green-700);
+  --status-completed-dot: var(--green-600);
+  --status-failed-bg: var(--red-50);
+  --status-failed-text: var(--red-700);
+  --status-failed-dot: var(--red-600);
+  --status-cancelled-bg: var(--slate-100);
+  --status-cancelled-text: var(--slate-500);
+  --status-cancelled-dot: var(--slate-500);
+
+  /* Sitemap graph edge kinds */
+  --edge-navigation: var(--az-600);
+  --edge-substate: var(--teal-600);
+  --edge-dead: var(--slate-400);
+
+  /* ─── Typography ────────────────────────────────────────────────── */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --text-2xl: 1.5rem; /* 24px — page title / H1 */
+  --text-xl: 1.25rem; /* 20px — H2 */
+  --text-lg: 1rem; /* 16px — H3 / card title */
+  --text-base: 0.875rem; /* 14px — body (app default) */
+  --text-sm: 0.8125rem; /* 13px — dense tables / secondary */
+  --text-xs: 0.75rem; /* 12px — labels, chips, captions */
+
+  --leading-tight: 1.25;
+  --leading-snug: 1.4;
+  --leading-normal: 1.5;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --tracking-tight: -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em; /* overline / uppercase labels */
+
+  /* ─── Spacing (4px base) ────────────────────────────────────────── */
+  --space-0: 0;
+  --space-1: 0.25rem; /* 4 */
+  --space-2: 0.5rem; /* 8 */
+  --space-3: 0.75rem; /* 12 */
+  --space-4: 1rem; /* 16 */
+  --space-5: 1.25rem; /* 20 */
+  --space-6: 1.5rem; /* 24 */
+  --space-8: 2rem; /* 32 */
+  --space-10: 2.5rem; /* 40 */
+  --space-12: 3rem; /* 48 */
+  --space-16: 4rem; /* 64 */
+
+  /* ─── Radius ────────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 6px; /* default controls */
+  --radius-lg: 8px; /* cards */
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  /* ─── Borders & focus ───────────────────────────────────────────── */
+  --border-width: 1px;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+
+  /* ─── Elevation (light) ─────────────────────────────────────────── */
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 8px -2px rgba(15, 23, 42, 0.1),
+    0 2px 4px -2px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 12px 24px -6px rgba(15, 23, 42, 0.12),
+    0 4px 8px -4px rgba(15, 23, 42, 0.08);
+
+  /* ─── Motion ────────────────────────────────────────────────────── */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
+
+  /* ─── Z-index ───────────────────────────────────────────────────── */
+  --z-base: 0;
+  --z-dropdown: 1000;
+  --z-sticky: 1100;
+  --z-overlay: 1200;
+  --z-modal: 1300;
+  --z-toast: 1400;
+  --z-crawl-badge: 2147483000; /* injected into target page — above app UI */
+
+  /* ─── Breakpoints (reference; use in media queries) ─────────────── */
+  --bp-sm: 640px;
+  --bp-md: 768px; /* usable floor — FR-AP-071 */
+  --bp-lg: 1024px;
+  --bp-xl: 1280px; /* optimized target — FR-AP-071 */
+  --bp-2xl: 1536px;
+}
+
+/* ─── Semantic tokens — DARK ──────────────────────────────────────── */
+/* Applied automatically under OS dark preference (unless forced to light),
+   and explicitly via [data-theme="dark"]. Only semantic tokens change. */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: var(--slate-950);
+    --color-surface: var(--slate-900);
+    --color-surface-2: var(--slate-800);
+    --color-surface-3: #273449;
+
+    --color-border: var(--slate-800);
+    --color-border-strong: var(--slate-700);
+    --color-border-interactive: var(--slate-500); /* 3.75:1 on surface */
+
+    --color-text: var(--slate-100);
+    --color-text-muted: var(--slate-400);
+    --color-text-subtle: var(--slate-subtle-d);
+    --color-text-inverse: var(--slate-900);
+
+    --color-primary: var(--az-600); /* button bg — white text, 5.28:1 */
+    --color-primary-hover: var(--az-500);
+    --color-primary-active: var(--az-400);
+    --color-on-primary: var(--slate-0);
+    --color-primary-text: var(--az-400); /* link/icon on surface, 5.66:1 */
+    --color-primary-subtle-bg: var(--az-950);
+    --color-primary-subtle-text: var(--az-300);
+
+    --color-focus-ring: var(--az-400);
+    --color-link: var(--az-400);
+
+    --color-success: var(--green-400);
+    --color-success-subtle-bg: var(--green-950);
+    --color-success-subtle-text: var(--green-300);
+    --color-warning: var(--amber-400);
+    --color-warning-subtle-bg: var(--amber-950);
+    --color-warning-subtle-text: var(--amber-300);
+    --color-danger: var(--red-400);
+    --color-danger-subtle-bg: var(--red-950);
+    --color-danger-subtle-text: var(--red-300);
+    --color-info: var(--az-400);
+    --color-info-subtle-bg: var(--az-950);
+    --color-info-subtle-text: var(--az-300);
+    --color-accent: var(--teal-400);
+
+    --status-pending-bg: var(--slate-800);
+    --status-pending-text: var(--slate-400);
+    --status-pending-dot: var(--slate-400);
+    --status-running-bg: var(--az-950);
+    --status-running-text: var(--az-300);
+    --status-running-dot: var(--az-400);
+    --status-paused-bg: var(--amber-950);
+    --status-paused-text: var(--amber-300);
+    --status-paused-dot: var(--amber-400);
+    --status-completed-bg: var(--green-950);
+    --status-completed-text: var(--green-300);
+    --status-completed-dot: var(--green-400);
+    --status-failed-bg: var(--red-950);
+    --status-failed-text: var(--red-300);
+    --status-failed-dot: var(--red-400);
+    --status-cancelled-bg: var(--slate-800);
+    --status-cancelled-text: var(--slate-subtle-d);
+    --status-cancelled-dot: var(--slate-500);
+
+    --edge-navigation: var(--az-400);
+    --edge-substate: var(--teal-400);
+    --edge-dead: var(--slate-500);
+
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 8px -2px rgba(0, 0, 0, 0.5),
+      0 2px 4px -2px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 12px 24px -6px rgba(0, 0, 0, 0.6),
+      0 4px 8px -4px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* Explicit override via toggle — must win over the media query above. */
+:root[data-theme="dark"] {
+  --color-bg: var(--slate-950);
+  --color-surface: var(--slate-900);
+  --color-surface-2: var(--slate-800);
+  --color-surface-3: #273449;
+
+  --color-border: var(--slate-800);
+  --color-border-strong: var(--slate-700);
+  --color-border-interactive: var(--slate-500);
+
+  --color-text: var(--slate-100);
+  --color-text-muted: var(--slate-400);
+  --color-text-subtle: var(--slate-subtle-d);
+  --color-text-inverse: var(--slate-900);
+
+  --color-primary: var(--az-600);
+  --color-primary-hover: var(--az-500);
+  --color-primary-active: var(--az-400);
+  --color-on-primary: var(--slate-0);
+  --color-primary-text: var(--az-400);
+  --color-primary-subtle-bg: var(--az-950);
+  --color-primary-subtle-text: var(--az-300);
+
+  --color-focus-ring: var(--az-400);
+  --color-link: var(--az-400);
+
+  --color-success: var(--green-400);
+  --color-success-subtle-bg: var(--green-950);
+  --color-success-subtle-text: var(--green-300);
+  --color-warning: var(--amber-400);
+  --color-warning-subtle-bg: var(--amber-950);
+  --color-warning-subtle-text: var(--amber-300);
+  --color-danger: var(--red-400);
+  --color-danger-subtle-bg: var(--red-950);
+  --color-danger-subtle-text: var(--red-300);
+  --color-info: var(--az-400);
+  --color-info-subtle-bg: var(--az-950);
+  --color-info-subtle-text: var(--az-300);
+  --color-accent: var(--teal-400);
+
+  --status-pending-bg: var(--slate-800);
+  --status-pending-text: var(--slate-400);
+  --status-pending-dot: var(--slate-400);
+  --status-running-bg: var(--az-950);
+  --status-running-text: var(--az-300);
+  --status-running-dot: var(--az-400);
+  --status-paused-bg: var(--amber-950);
+  --status-paused-text: var(--amber-300);
+  --status-paused-dot: var(--amber-400);
+  --status-completed-bg: var(--green-950);
+  --status-completed-text: var(--green-300);
+  --status-completed-dot: var(--green-400);
+  --status-failed-bg: var(--red-950);
+  --status-failed-text: var(--red-300);
+  --status-failed-dot: var(--red-400);
+  --status-cancelled-bg: var(--slate-800);
+  --status-cancelled-text: var(--slate-subtle-d);
+  --status-cancelled-dot: var(--slate-500);
+
+  --edge-navigation: var(--az-400);
+  --edge-substate: var(--teal-400);
+  --edge-dead: var(--slate-500);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 8px -2px rgba(0, 0, 0, 0.5),
+    0 2px 4px -2px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 24px -6px rgba(0, 0, 0, 0.6),
+    0 4px 8px -4px rgba(0, 0, 0, 0.5);
+}
+
+/* Base application of brand type + smooth theme transitions. Opt in by adding
+   class="sc-root" to <body> (or the popup/options root). */
+.sc-root {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--color-text);
+  background: var(--color-bg);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}

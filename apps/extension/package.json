@@ -1,0 +1,30 @@
+{
+  "name": "@snapcrawl/extension",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@snapcrawl/shared": "*",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.7.1",
+    "@types/chrome": "latest",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.0.3",
+    "happy-dom": "latest",
+    "typescript": "^5",
+    "vite": "^8.1.4",
+    "vitest": "latest"
+  }
+}

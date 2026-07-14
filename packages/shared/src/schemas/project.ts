@@ -1,0 +1,98 @@
+// Project create/update DTOs (FR-BE-020..023). The base-URL-in-allowedDomains
+// check (FR-BE-023) is enforced here when domains are supplied; the non-empty
+// rule and full validation live in the project service/route.
+import { z } from "zod";
+import { cursorQuerySchema, objectIdSchema } from "./common.js";
+import { crawlConfigSchema } from "./config.js";
+import { sessionStatusSchema } from "./session.js";
+
+export const projectStatusSchema = z.enum(["active", "archived", "pending-delete"]);
+
+/** GET /projects query: cursor pagination + case-insensitive name search
+ *  (FR-BE-020/073). The cursor is a project ObjectId. */
+export const projectListQuerySchema = cursorQuerySchema.extend({
+  cursor: objectIdSchema.optional(),
+  search: z.string().trim().max(200).optional(),
+});
+
+export type ProjectListQuery = z.infer<typeof projectListQuerySchema>;
+
+/** Extract the host from a URL without relying on the URL global (shared has no DOM/node libs). */
+function hostOf(url: string): string | null {
+  const m = /^[a-z][a-z\d+.-]*:\/\/([^/:?#]+)/i.exec(url);
+  return m ? m[1]!.toLowerCase() : null;
+}
+
+/** True when `host` is `domain` or a subdomain of it. */
+function hostInDomains(host: string, domains: readonly string[]): boolean {
+  return domains.some((d) => {
+    const dd = d.toLowerCase();
+    return host === dd || host.endsWith(`.${dd}`);
+  });
+}
+
+const baseFields = {
+  name: z.string().min(1).max(120),
+  description: z.string().max(2000).optional(),
+  baseUrl: z.url(),
+  config: crawlConfigSchema.optional(),
+};
+
+export const projectCreateSchema = z
+  .object(baseFields)
+  .superRefine((val, ctx) => {
+    const domains = val.config?.allowedDomains;
+    if (domains && domains.length > 0) {
+      const host = hostOf(val.baseUrl);
+      if (host && !hostInDomains(host, domains)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["config", "allowedDomains"],
+          message: "allowedDomains must include the base URL's domain (FR-BE-023).",
+        });
+      }
+    }
+  });
+
+export const projectUpdateSchema = z.object({
+  name: baseFields.name.optional(),
+  description: baseFields.description,
+  baseUrl: baseFields.baseUrl.optional(),
+  config: crawlConfigSchema.partial().optional(),
+  status: projectStatusSchema.optional(),
+});
+
+export type ProjectStatus = z.infer<typeof projectStatusSchema>;
+export type ProjectCreate = z.infer<typeof projectCreateSchema>;
+export type ProjectUpdate = z.infer<typeof projectUpdateSchema>;
+
+// ── Response entities (what the API returns; SRS §8.3) ──────────────────────
+// Added for the admin panel's list/detail/edit views. The write DTOs above are
+// inputs; these are the read model both the panel and API should share.
+
+/** Compact last-run summary shown in the projects list (FR-AP-020). */
+export const projectLastRunSchema = z.object({
+  sessionId: objectIdSchema,
+  status: sessionStatusSchema,
+  startedAt: z.coerce.date().nullable(),
+  screensCaptured: z.number().int().min(0).default(0),
+});
+
+/** Full project record returned by the API (SRS §8.3, config per FR-BE-021). */
+export const projectSchema = z.object({
+  id: objectIdSchema,
+  ownerId: objectIdSchema,
+  memberIds: z.array(objectIdSchema).default([]),
+  name: z.string(),
+  description: z.string().optional(),
+  baseUrl: z.string(),
+  config: crawlConfigSchema,
+  status: projectStatusSchema,
+  createdAt: z.coerce.date(),
+  updatedAt: z.coerce.date(),
+  // Enriched on list responses; omitted/null on plain detail reads.
+  lastRun: projectLastRunSchema.nullable().optional(),
+});
+
+export type ProjectLastRun = z.infer<typeof projectLastRunSchema>;
+export type Project = z.infer<typeof projectSchema>;
