@@ -1,0 +1,35 @@
+# SnapCrawl admin panel (apps/web) — Next.js 16.
+#
+# EasyPanel: create a second App service from this same repo, set Build method
+# to "Dockerfile" with file path "Dockerfile.web", and add these env vars
+# BEFORE the first build (NEXT_PUBLIC_* values are baked in at build time):
+#   NEXT_PUBLIC_API_URL      = https://<api-service-domain>
+#   NEXT_PUBLIC_USE_FIXTURES = false
+# Panel listens on port 3000 — point the service's domain at port 3000.
+FROM node:24-alpine
+
+WORKDIR /app
+
+# NEXT_PUBLIC_* are inlined into the client bundle during `next build`,
+# so they must arrive as build args, not just runtime env.
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_USE_FIXTURES=false
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_USE_FIXTURES=$NEXT_PUBLIC_USE_FIXTURES \
+    NODE_ENV=production
+
+# Dependency layer — cached until a manifest or the lockfile changes.
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json packages/shared/
+COPY apps/web/package.json apps/web/
+RUN npm ci --workspace apps/web --workspace packages/shared
+
+COPY tsconfig.base.json ./
+COPY packages/shared packages/shared
+COPY apps/web apps/web
+RUN npm run build -w apps/web && chown -R node:node /app/apps/web/.next
+
+EXPOSE 3000
+
+USER node
+CMD ["npm", "run", "start", "-w", "apps/web"]
