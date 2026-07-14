@@ -22,7 +22,7 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY apps/web/package.json apps/web/
-RUN npm ci --workspace apps/web --workspace packages/shared
+RUN npm ci --include=dev --workspace apps/web --workspace packages/shared
 
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared

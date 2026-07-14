@@ -25,11 +25,13 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
     NODE_ENV=production
 
 # Dependency layer — root workspace included for `concurrently`.
+# --include=dev: NODE_ENV=production is already set above, which would
+# otherwise make npm skip devDependencies (typescript, tsx — both needed).
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
-RUN npm ci --include-workspace-root --workspace apps/api --workspace apps/web --workspace packages/shared
+RUN npm ci --include=dev --include-workspace-root --workspace apps/api --workspace apps/web --workspace packages/shared
 
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
