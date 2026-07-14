@@ -2,7 +2,13 @@
   "name": "snapcrawl",
   "private": true,
   "workspaces": ["apps/*", "packages/*"],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
+    "start": "npm run start:api",
+    "start:api": "npm run start -w apps/api",
+    "start:web": "npm run start -w apps/web",
     "dev:api": "npm run dev -w apps/api",
     "dev:web": "npm run dev -w apps/web",
     "dev:ext": "npm run dev -w apps/extension",

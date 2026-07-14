@@ -1,0 +1,14 @@
+# Nixpacks deploy config (EasyPanel). The default service is the Express API
+# (apps/api); it runs from TypeScript via tsx, so no compile output is needed —
+# the build phase just typechecks as a deploy gate.
+#
+# To deploy the admin panel (apps/web) as a second EasyPanel service from this
+# same repo, override per-service env vars:
+#   NIXPACKS_BUILD_CMD = npm run build -w apps/web
+#   NIXPACKS_START_CMD = npm run start:web
+
+[phases.build]
+cmds = ["npm run typecheck -w apps/api"]
+
+[start]
+cmd = "npm run start:api"
