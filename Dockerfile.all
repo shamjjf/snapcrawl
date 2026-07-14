@@ -1,0 +1,46 @@
+# SnapCrawl combined image — API (apps/api) + admin panel (apps/web) in ONE
+# container, for a single EasyPanel service.
+#
+# EasyPanel setup:
+#   Build method: Dockerfile, file path "Dockerfile.all".
+#   Two domains on the same service:
+#     panel domain → port 3000   (Next.js)
+#     api   domain → port 4000   (Express; do NOT set PORT, 4000 is the default)
+#   Env vars (before first build — NEXT_PUBLIC_* bake in at build time):
+#     NEXT_PUBLIC_API_URL      = https://<api-domain>
+#     NEXT_PUBLIC_USE_FIXTURES = false
+#     JWT_SECRET, MONGODB_URI, WEB_ORIGIN=https://<panel-domain>, S3_* as usual
+#
+# Trade-off vs Dockerfile / Dockerfile.web: one service to manage, but every
+# deploy rebuilds the panel too, and if either process dies the whole
+# container restarts (concurrently -k), briefly taking both down.
+FROM node:24-alpine
+
+WORKDIR /app
+
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_USE_FIXTURES=false
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_USE_FIXTURES=$NEXT_PUBLIC_USE_FIXTURES \
+    NODE_ENV=production
+
+# Dependency layer — root workspace included for `concurrently`.
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json packages/shared/
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+RUN npm ci --include-workspace-root --workspace apps/api --workspace apps/web --workspace packages/shared
+
+COPY tsconfig.base.json ./
+COPY packages/shared packages/shared
+COPY apps/api apps/api
+COPY apps/web apps/web
+RUN npm run build -w apps/web && chown -R node:node /app/apps/web/.next
+
+# API on 4000 (its default), panel on 3000.
+EXPOSE 3000 4000
+
+USER node
+CMD ["node_modules/.bin/concurrently", "-k", "-n", "api,web", \
+     "node_modules/.bin/tsx apps/api/src/index.ts", \
+     "npm run start -w apps/web"]
