@@ -13,14 +13,36 @@ import { Upload } from "@aws-sdk/lib-storage";
 import type { Readable } from "node:stream";
 import { errorFields, log } from "./logger";
 
-// S3 object storage for screenshots (FR-BE-040/041/044, NFR-013). MinIO stands
-// in for S3 locally (path-style + custom endpoint); real S3/CloudFront in prod.
-const ENDPOINT = process.env.S3_ENDPOINT || undefined;
-const REGION = process.env.S3_REGION ?? "us-east-1";
-export const S3_BUCKET = process.env.S3_BUCKET ?? "snapcrawl";
-const ACCESS_KEY = process.env.S3_ACCESS_KEY_ID ?? "minioadmin";
-const SECRET_KEY = process.env.S3_SECRET_ACCESS_KEY ?? "minioadmin";
-const FORCE_PATH_STYLE = (process.env.S3_FORCE_PATH_STYLE ?? "true") === "true";
+// S3 object storage for screenshots (FR-BE-040/041/044, NFR-013). Real AWS S3
+// everywhere; every value comes from the environment with no dev fallback.
+//
+// `S3_ENDPOINT` stays supported but is empty by default, which is what selects
+// real AWS. It exists only for an S3-compatible server (LocalStack, a private
+// gateway) and is not part of the normal deployment.
+/**
+ * An env var, treating blank and whitespace as absent.
+ *
+ * `?? ` alone is not enough: `S3_REGION=` in a .env file yields "", which is
+ * not nullish, so a plain `?? "us-east-1"` would hand the SDK an empty region
+ * and `new S3Client` would throw "Region is missing" at import — before the
+ * readable startup error in index.ts can ever run. Blank must mean unset.
+ */
+function envValue(name: string): string | undefined {
+  const raw = process.env[name]?.trim();
+  return raw ? raw : undefined;
+}
+
+const ENDPOINT = envValue("S3_ENDPOINT");
+const REGION = envValue("S3_REGION") ?? "us-east-1";
+export const S3_BUCKET = envValue("S3_BUCKET") ?? "snapcrawl";
+const ACCESS_KEY = envValue("S3_ACCESS_KEY_ID");
+const SECRET_KEY = envValue("S3_SECRET_ACCESS_KEY");
+// AWS addresses buckets virtual-hosted-style; path-style is a compatibility mode
+// for custom endpoints and is deprecated against real S3. Default follows the
+// endpoint so neither deployment needs to set this explicitly.
+const FORCE_PATH_STYLE = envValue("S3_FORCE_PATH_STYLE")
+  ? envValue("S3_FORCE_PATH_STYLE") === "true"
+  : ENDPOINT !== undefined;
 
 /** Hard limits (NFR-013): uploads ≤ 15 MB, PUT presign ≤ 10 min, GET signed ≤ 1 h. */
 export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
@@ -40,11 +62,31 @@ export function isAllowedUploadContentType(contentType: string | undefined): boo
   return (ALLOWED_UPLOAD_CONTENT_TYPES as readonly string[]).includes(base);
 }
 
+/**
+ * Which required S3 settings are absent from `env` (FR-BE-040, C-05).
+ *
+ * Checked at boot rather than at first upload. There is no placeholder
+ * credential to fall back on any more, and that is deliberate: a dummy key would
+ * let the API start "fine" and then fail every screenshot with a 403 hours
+ * later, which reads as a storage outage rather than a missing variable. Pure —
+ * `env` is injected so a test can exercise it without touching the process.
+ */
+export function missingS3Config(env: NodeJS.ProcessEnv = process.env): string[] {
+  const required = ["S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"];
+  return required.filter((name) => !(env[name] ?? "").trim());
+}
+
 export const s3 = new S3Client({
   region: REGION,
   endpoint: ENDPOINT,
   forcePathStyle: FORCE_PATH_STYLE,
-  credentials: { accessKeyId: ACCESS_KEY, secretAccessKey: SECRET_KEY },
+  // Omitted entirely when unset, so the AWS SDK's own provider chain (AWS_*
+  // vars, shared config, instance/task role) still has a chance to supply
+  // credentials. Passing `{ accessKeyId: undefined }` would instead pin the
+  // client to empty credentials and defeat that.
+  ...(ACCESS_KEY && SECRET_KEY
+    ? { credentials: { accessKeyId: ACCESS_KEY, secretAccessKey: SECRET_KEY } }
+    : {}),
 });
 
 // ── Bucket bootstrap ────────────────────────────────────────────────────────

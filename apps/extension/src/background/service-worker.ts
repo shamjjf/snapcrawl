@@ -69,7 +69,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 });
 
 // Real HTTP transport for the upload client. host_permissions cover the backend
-// origin and the S3/MinIO PUT origin, so these run CORS-free from the SW.
+// origin and the S3 bucket PUT origin, so these run CORS-free from the SW.
 const fetchTransport: Transport = async (req) => {
   const res = await fetch(req.url, {
     method: req.method,

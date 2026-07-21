@@ -38,8 +38,13 @@ npm run dev                        # all three via concurrently
 npm run test                       # all workspaces
 npm run test -w apps/api           # one workspace
 npm install <pkg> -w apps/api      # add a dep to one workspace
-docker-compose up -d               # MongoDB :27017, MinIO :9000 (console :9001)
+docker-compose up -d               # MongoDB :27017
 ```
+
+Object storage is real AWS S3 in every environment — there is no local
+stand-in. `apps/api` refuses to start until `S3_REGION`, `S3_BUCKET`,
+`S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are set; see
+`apps/api/.env.example`.
 
 ## Hard platform constraints (SRS §2.5 — these shape everything)
 
@@ -96,8 +101,16 @@ docker-compose up -d               # MongoDB :27017, MinIO :9000 (console :9001)
 - `next.config.js` needs `transpilePackages: ['@snapcrawl/shared']`.
 - Load the extension unpacked from `apps/extension/dist` via
   chrome://extensions with Developer Mode on; CRXJS hot-reloads it.
-- MinIO stands in for S3 locally; endpoint/creds come from `.env`
-  (keep `.env.example` current whenever env vars change).
+- Screenshots go to real AWS S3; region/bucket/creds come from `.env`
+  (keep `.env.example` current whenever env vars change). `S3_ENDPOINT` is
+  blank for AWS — it exists only for an S3-compatible server.
+- A hosted extension build needs `SNAPCRAWL_API_ORIGIN` and
+  `SNAPCRAWL_S3_ORIGIN` set before `npm run build -w apps/extension`; they
+  are baked into the manifest's `host_permissions` and cannot change at
+  runtime.
+- The S3 bucket needs a CORS rule allowing `PUT` from the extension and
+  `GET` from the panel origin, or uploads and downloads fail in the browser
+  with no server-side error.
 
 ## Definition of done
 

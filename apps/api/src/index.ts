@@ -5,7 +5,7 @@ import { connectDb } from "./db";
 import { UserModel } from "./models/user";
 import { hashPassword } from "./auth";
 import { errorFields, log } from "./lib/logger";
-import { startBucketEnsurer } from "./lib/s3";
+import { missingS3Config, startBucketEnsurer } from "./lib/s3";
 import { resolveAdminSeed } from "./modules/users/service";
 import { startPurgeSweeper } from "./modules/projects/purge";
 import { startStaleSweeper } from "./modules/sessions/sweep";
@@ -70,6 +70,16 @@ async function start(): Promise<void> {
   // Fail fast if the JWT signing secret is missing (NFR-011 — no hardcoded default).
   if (!process.env.JWT_SECRET) {
     throw new Error("JWT_SECRET is required — set it in the environment before starting.");
+  }
+  // Same rule for object storage (FR-BE-040): screenshots are the product, and
+  // there is no placeholder credential to limp along on, so an incomplete S3
+  // configuration is a startup error rather than a 403 on the first capture.
+  const missingS3 = missingS3Config();
+  if (missingS3.length > 0) {
+    throw new Error(
+      `Missing AWS S3 configuration: ${missingS3.join(", ")} — set these in the environment ` +
+        `before starting (see apps/api/.env.example).`,
+    );
   }
   await connectDb();
   await bootstrapAdmin();

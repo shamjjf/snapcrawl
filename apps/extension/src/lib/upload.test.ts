@@ -21,6 +21,8 @@ const META: CaptureMeta = {
   depth: 0,
   viewport: { width: 800, height: 600 },
   fullPage: false,
+  // FR-EX-090 — a run is one device, so every capture is tagged with its variant.
+  variant: "desktop",
 };
 
 const NO_SLEEP = { sleep: async () => {}, rand: () => 0 };

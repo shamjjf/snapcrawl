@@ -1,5 +1,29 @@
 import { defineManifest } from "@crxjs/vite-plugin";
 
+/**
+ * Origins the service worker must reach CORS-free: the backend for pairing
+ * (FR-EX-001) and the S3 bucket for presigned PUT uploads (FR-EX-081).
+ *
+ * These are build-time because `host_permissions` is baked into the manifest —
+ * the extension cannot learn them at runtime the way it learns the API base URL.
+ * A hosted build sets them before `npm run build -w apps/extension`:
+ *
+ *   SNAPCRAWL_API_ORIGIN=https://api.example.com
+ *   SNAPCRAWL_S3_ORIGIN=https://<bucket>.s3.<region>.amazonaws.com
+ *
+ * The S3 default is deliberately the whole of `amazonaws.com`, because the
+ * bucket and region are not known at build time and a wrong literal would fail
+ * uploads silently. Narrow it with SNAPCRAWL_S3_ORIGIN in any real deployment —
+ * the default grants the worker more reach than one bucket needs.
+ */
+const API_ORIGIN = process.env.SNAPCRAWL_API_ORIGIN ?? "http://localhost:4000";
+const S3_ORIGIN = process.env.SNAPCRAWL_S3_ORIGIN ?? "https://*.amazonaws.com";
+
+/** An origin as a Chrome match pattern: exactly one trailing `/*`. */
+function matchPattern(origin: string): string {
+  return `${origin.replace(/\/+$/, "")}/*`;
+}
+
 // MV3 manifest for the SnapCrawl capture agent.
 // Permissions are the minimum the crawl engine needs (FR-EX-015); host access
 // is granted per-project at runtime, never at install (FR-EX-015, C-07).
@@ -39,10 +63,7 @@ export default defineManifest({
     "debugger",
     "unlimitedStorage",
   ],
-  // Backend origin for pairing (FR-EX-001) + the S3/MinIO origin for presigned
-  // PUT uploads (FR-EX-081) — the SW hits these CORS-free. Dev defaults; add your
-  // deployed API + bucket origins when hosted.
-  host_permissions: ["http://localhost:4000/*", "http://localhost:9000/*"],
+  host_permissions: [matchPattern(API_ORIGIN), matchPattern(S3_ORIGIN)],
   // Target app access is granted at runtime, never at install (C-07).
   //
   // `<all_urls>` and not `*://*/*`, which is what this used to be: verified in

@@ -13,12 +13,16 @@ const member: User = { id: "m1", name: "Mem", email: "m@x.dev", role: "member" }
 
 // FR-BE-020 — member-scoped visibility; admins see all.
 describe("project visibility & management (FR-BE-020)", () => {
-  it("gives admins an unrestricted filter", () => {
-    expect(visibilityFilter(admin)).toEqual({});
+  // Every filter carries `deletedAt: null` so soft-deleted projects stay hidden
+  // from every project-scoped read (FR-BE-025) — an admin is unrestricted by
+  // ownership, not by deletion.
+  it("gives admins a filter unrestricted by ownership", () => {
+    expect(visibilityFilter(admin)).toEqual({ deletedAt: null });
   });
 
   it("scopes members to owned or assigned projects", () => {
     expect(visibilityFilter(member)).toEqual({
+      deletedAt: null,
       $or: [{ ownerId: "m1" }, { memberIds: "m1" }],
     });
   });

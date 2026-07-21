@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@snapcrawl/shared": "*",
@@ -21,7 +23,9 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.3",
+    "happy-dom": "^20.11.0",
     "typescript": "^5",
-    "vite": "^8.1.4"
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
   }
 }

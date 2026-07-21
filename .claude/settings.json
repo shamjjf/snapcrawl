@@ -2,7 +2,16 @@
   "permissions": {
     "allow": [
       "Bash(git checkout *)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(git push *)",
+      "Bash(git fetch *)",
+      "Bash(grep -E '\\\\.\\(test|spec\\)\\\\.[tj]sx?$')",
+      "Bash(git check-ignore *)",
+      "Bash(echo \"root build exit code: $?\")",
+      "Bash(grep -E '\\\\.test\\\\.[tj]sx?$')",
+      "Bash(echo \"exit: $?\")",
+      "Bash(SNAPCRAWL_API_ORIGIN=https://api.example.com SNAPCRAWL_S3_ORIGIN=https://acme-shots.s3.ap-south-1.amazonaws.com/ npm run build -w apps/extension)",
+      "Bash(JWT_SECRET=x S3_REGION= S3_BUCKET= S3_ACCESS_KEY_ID= S3_SECRET_ACCESS_KEY= timeout 45 npx tsx src/index.ts)"
     ]
   }
 }

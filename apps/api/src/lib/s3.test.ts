@@ -1,5 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { GET_TTL_SEC, PUT_TTL_SEC, presignGet, presignPut } from "./s3";
+import { GET_TTL_SEC, PUT_TTL_SEC, missingS3Config, presignGet, presignPut } from "./s3";
+
+// FR-BE-040 / C-05 — the AWS settings are environment-only: there is no
+// placeholder credential, so a missing one must surface at boot.
+describe("AWS S3 configuration (FR-BE-040)", () => {
+  const full = {
+    S3_REGION: "ap-south-1",
+    S3_BUCKET: "snapcrawl-prod",
+    S3_ACCESS_KEY_ID: "AKIAEXAMPLE",
+    S3_SECRET_ACCESS_KEY: "secret",
+  };
+
+  it("reports nothing missing when every required value is set", () => {
+    expect(missingS3Config(full)).toEqual([]);
+  });
+
+  it("names each absent setting so the operator knows what to add", () => {
+    const { S3_BUCKET: _b, S3_SECRET_ACCESS_KEY: _s, ...partial } = full;
+    expect(missingS3Config(partial)).toEqual(["S3_BUCKET", "S3_SECRET_ACCESS_KEY"]);
+  });
+
+  it("treats a blank or whitespace value as missing, not as configured", () => {
+    expect(missingS3Config({ ...full, S3_ACCESS_KEY_ID: "" })).toEqual(["S3_ACCESS_KEY_ID"]);
+    expect(missingS3Config({ ...full, S3_ACCESS_KEY_ID: "   " })).toEqual(["S3_ACCESS_KEY_ID"]);
+  });
+
+  it("does not require S3_ENDPOINT — blank is what selects real AWS", () => {
+    expect(missingS3Config(full)).not.toContain("S3_ENDPOINT");
+  });
+});
 
 // FR-BE-040/044 — presigned URLs are signed locally (no network): a PUT for
 // upload and a short-lived GET for reads, each bound to the object key.

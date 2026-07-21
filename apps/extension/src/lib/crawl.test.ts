@@ -10,6 +10,7 @@ import {
   shouldNavigateInPlace,
   stabilitySettled,
   type ClickStep,
+  type RunOverrides,
 } from "./crawl";
 import type { InjectedCandidate } from "../content/crawl-inject";
 import type { CrawlConfig } from "@snapcrawl/shared";
@@ -22,7 +23,13 @@ function cand(partial: Partial<InjectedCandidate> & { key: string }): InjectedCa
     text: "",
     href: null,
     destructive: false,
+    excluded: false,
+    submit: false,
+    nativeDialog: false,
+    similar: false,
     selector: "",
+    anchor: null,
+    containerKey: null,
     ...partial,
   };
 }
@@ -130,10 +137,19 @@ describe("canDescend — depth cap (FR-EX-030)", () => {
 });
 
 describe("configToRunOptions — project config becomes run config (FR-EX-002)", () => {
-  const overrides = { maxScreens: 40, maxDepth: 4, maxMinutes: 10, fullPage: true };
+  // The popup holds no limit state: a run goes until stopped, so the limits come
+  // from the project config alone and overrides carry only per-run toggles.
+  const overrides: RunOverrides = {
+    fullPage: true,
+    proCaptureMode: false,
+    captureMode: "desktop",
+  };
 
   it("takes blocklist + clickDelay + maskSelectors from the project config and maps overrides", () => {
     const config = {
+      maxScreens: 40,
+      maxDepth: 4,
+      maxDurationMin: 10,
       destructiveTextBlocklist: ["Nuke", "Wipe"],
       clickDelayMs: 800,
       maskSelectors: [".card-number", "[data-pii]"],
@@ -148,6 +164,8 @@ describe("configToRunOptions — project config becomes run config (FR-EX-002)",
       clickDelayMs: 800,
       blocklist: ["Nuke", "Wipe"],
       maskSelectors: [".card-number", "[data-pii]"],
+      proCaptureMode: false,
+      captureMode: "desktop",
     });
   });
 
@@ -156,6 +174,13 @@ describe("configToRunOptions — project config becomes run config (FR-EX-002)",
     expect(opts.blocklist.length).toBeGreaterThan(0);
     expect(opts.clickDelayMs).toBeUndefined();
     expect(opts.safeMode).toBe(false);
+  });
+
+  it("leaves an unpaired run unlimited (null = no ceiling)", () => {
+    const opts = configToRunOptions(null, overrides, false);
+    expect(opts.maxScreens).toBeNull();
+    expect(opts.maxDepth).toBeNull();
+    expect(opts.maxDurationMin).toBeNull();
   });
 });
 

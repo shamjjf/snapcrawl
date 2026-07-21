@@ -88,14 +88,14 @@ export function ScreenViewer({
    *
    * This deliberately fetches the bytes into a Blob rather than the far simpler
    * `<a href={url} download>`. The `download` attribute is IGNORED for a
-   * cross-origin URL — and the image lives on the S3/MinIO origin, not the API —
+   * cross-origin URL — and the image lives on the S3 bucket origin, not the API —
    * so the anchor would just open the picture inline and the "download" would
    * silently not happen. Blob + object URL is the only client-side way to force a
    * save across origins. The presigned URL carries its own auth in the query
    * string, so this default-credentials fetch sends no cookies, which is correct.
    *
    * Prod note: this needs the image bucket to allow cross-origin GET from the
-   * panel (dev MinIO already reflects the origin). If a deployment's bucket CORS
+   * panel — set a CORS rule on the bucket allowing GET from it. If that rule
    * is stricter, the fetch throws and the user gets the toast below rather than a
    * silent no-op — and the robust fix then is a backend presign with
    * `response-content-disposition: attachment`, flagged to that lane.

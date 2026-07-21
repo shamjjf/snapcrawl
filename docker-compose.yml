@@ -1,5 +1,8 @@
-# Local infra for SnapCrawl. MongoDB stores metadata; MinIO stands in for S3.
-# Endpoint/creds come from .env — keep .env.example current when they change.
+# Local infra for SnapCrawl: MongoDB for metadata.
+#
+# Object storage is NOT here. Screenshots go to real AWS S3 in every
+# environment, configured entirely through apps/api/.env (S3_REGION, S3_BUCKET
+# and the access keys). There is no local storage stand-in to start.
 services:
   mongo:
     image: mongo:8
@@ -9,19 +12,5 @@ services:
     volumes:
       - mongo-data:/data/db
 
-  minio:
-    image: minio/minio:latest
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # web console
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-    volumes:
-      - minio-data:/data
-
 volumes:
   mongo-data:
-  minio-data:
