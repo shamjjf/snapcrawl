@@ -5,10 +5,21 @@
 // here (the options/popup pages can't — the API's CORS only allows the web
 // origin). C-05: the bearer token is never logged.
 //
-// C-03: crawl orchestration is NOT yet here (it runs in the popup for Phase 0);
-// moving it here with chrome.storage checkpoints is FR-EX-080/060, a later slice.
+// Crawl orchestration lives here (not the popup) so a run survives the popup
+// closing. C-03: MV3 kills this worker after ~30 s idle, so the engine
+// checkpoints its state (FR-EX-080) and a woken worker rebuilds the run from it
+// — see ensureResumed/resumeCrawl below, which every wake trigger funnels through.
 
 import type { ExtMessage } from "../lib/messaging";
+import {
+  clearCheckpoint,
+  getSessionNonce,
+  readCheckpoint,
+  readCheckpointMirror,
+  resumeVeto,
+  type CrawlCheckpoint,
+} from "../lib/checkpoint";
+import { updateSession } from "../lib/crawl-upload";
 import {
   extProjectsUrl,
   getPairing,
@@ -39,6 +50,22 @@ import type { CrawlRunState, CrawlStatus } from "../lib/messaging";
 
 chrome.runtime.onInstalled.addListener((details) => {
   console.info("[SnapCrawl] installed:", details.reason);
+  // An install/update invalidates the injected content scripts and may have
+  // changed the engine underneath a checkpoint the old one wrote, so a run must
+  // never carry across it (CHECKPOINT_VERSION guards the checkpoint's shape; this
+  // guards its behaviour). Ordering matters twice over: let any resume kicked off
+  // at module eval settle first — otherwise it re-arms the alarm and rewrites the
+  // checkpoint we just cleared — and check the mirror too, since storage.session
+  // is dropped when the extension reloads and is usually already empty here.
+  void (async () => {
+    await ensureResumed().catch(() => {});
+    if (crawl.controller) {
+      crawl.controller.cancel(); // its finally finalises the session and clears up
+      return;
+    }
+    const c = (await readCheckpoint()) ?? (await readCheckpointMirror());
+    if (c) await abandonCheckpoint(c, `extension ${details.reason}`);
+  })();
 });
 
 // Real HTTP transport for the upload client. host_permissions cover the backend
@@ -98,14 +125,57 @@ async function callProjects(backendUrl: string, token: string): Promise<Projects
 // drives the user's OWN current tab in place — no separate window (product
 // decision). C-01: captureVisibleTab needs the crawl tab to be the focused
 // window's active tab, so we focus that window once here and the engine
-// re-activates the tab before every capture. Checkpoint/resume across SW
-// eviction is a later slice — an active crawl keeps the SW alive.
+// re-activates the tab before every capture.
+//
+// This object is worker memory: it dies with the worker (C-03). The durable copy
+// is the checkpoint (FR-EX-080) — treat that, not this, as the source of truth
+// for "is a crawl in flight".
 const crawl = {
   controller: null as CrawlController | null,
   runState: "idle" as CrawlRunState,
   progress: null as CrawlProgress | null,
   result: null as CrawlResult | null,
 };
+
+// FR-EX-080 — the recovery trigger. To be precise about what this does: an alarm
+// cannot keep a worker alive, and 30 s is the floor Chrome allows (anything
+// shorter is clamped). A *running* crawl keeps itself alive through its own
+// executeScript/tabs traffic; this alarm exists to WAKE the worker within ~30 s
+// of an eviction so the run can be rebuilt — most importantly during a pause,
+// where the engine makes no API calls at all and eviction is near-certain.
+const RESUME_ALARM = "sc-crawl-resume";
+
+async function armResumeAlarm(): Promise<void> {
+  try {
+    await chrome.alarms.create(RESUME_ALARM, { periodInMinutes: 0.5 });
+  } catch {
+    /* ignore */
+  }
+}
+
+async function clearResumeAlarm(): Promise<void> {
+  try {
+    await chrome.alarms.clear(RESUME_ALARM);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Give up on a run we can't rebuild: finalise the backend session honestly
+ *  (partial results stay — the shots are in the capture sink) and drop the
+ *  checkpoint so nothing retries it. FR-EX-083 / EC-019. */
+async function abandonCheckpoint(c: CrawlCheckpoint | null, why: string): Promise<void> {
+  if (c?.sessionId) {
+    try {
+      await updateSession(c.sessionId, { status: "failed", endReason: "error" });
+    } catch {
+      /* best effort — the heartbeat going stale is the backstop */
+    }
+  }
+  await clearCheckpoint();
+  await clearResumeAlarm();
+  console.info(`[SnapCrawl] discarded an interrupted crawl (${why}).`);
+}
 
 function mapRunState(reason: CrawlReason): CrawlRunState {
   if (reason === "cancelled") return "cancelled";
@@ -127,11 +197,49 @@ async function waitTabComplete(tabId: number): Promise<void> {
   }
 }
 
+/** Wire a controller into the worker's state and start it. Shared by a fresh
+ *  start and a resume — the only difference is the `resume` checkpoint and
+ *  whether the run state comes back paused. */
+function runController(
+  opts: CrawlOptions & { target: { tabId: number; windowId: number } },
+  resume?: CrawlCheckpoint,
+): void {
+  const { tabId } = opts.target;
+  const controller = new CrawlController();
+  crawl.controller = controller;
+  crawl.runState = resume?.paused ? "paused" : "running";
+  void controller
+    .run(
+      opts,
+      (p) => {
+        crawl.progress = p;
+      },
+      resume,
+    )
+    .then((res) => {
+      crawl.result = res;
+      crawl.runState = mapRunState(res.reason);
+    })
+    .catch(() => {
+      crawl.runState = "failed";
+    })
+    .finally(() => {
+      crawl.controller = null;
+      void clearResumeAlarm();
+      chrome.scripting.executeScript({ target: { tabId }, func: removeRunBadge }).catch(() => {});
+    });
+}
+
 async function startCrawl(
   startUrl: string,
   tab: { tabId: number; windowId: number },
   runOptions: Omit<CrawlOptions, "target">,
 ): Promise<{ ok: boolean; message?: string }> {
+  // Settle any resume already in flight before reading crawl.controller. A woken
+  // worker kicks one off at module load, and without this the check below could
+  // read `null` while that resume is still awaiting — and we'd put a second
+  // controller on the same tab.
+  await ensureResumed();
   if (crawl.controller && (crawl.runState === "running" || crawl.runState === "paused")) {
     return { ok: false, message: "A crawl is already running." };
   }
@@ -139,6 +247,11 @@ async function startCrawl(
   if (tabId == null || windowId == null) {
     return { ok: false, message: "No active tab to crawl." };
   }
+  // Drop any previous run's checkpoint before this one writes its first: a corpse
+  // left by a crawl that died without finalising would otherwise let the alarm
+  // resume it *alongside* this run — two controllers driving one tab — and this
+  // run's resetCrawlShots() would wipe the shots that corpse still counts on.
+  await clearCheckpoint();
   crawl.runState = "running";
   crawl.progress = null;
   crawl.result = null;
@@ -176,27 +289,84 @@ async function startCrawl(
     /* badge best-effort */
   }
 
-  const controller = new CrawlController();
-  crawl.controller = controller;
-  void controller
-    .run({ ...runOptions, target: { tabId, windowId } }, (p) => {
-      crawl.progress = p;
-    })
-    .then((res) => {
-      crawl.result = res;
-      crawl.runState = mapRunState(res.reason);
-    })
-    .catch(() => {
-      crawl.runState = "failed";
-    })
-    .finally(() => {
-      crawl.controller = null;
-      chrome.scripting.executeScript({ target: { tabId }, func: removeRunBadge }).catch(() => {});
-    });
+  await armResumeAlarm(); // FR-EX-080 — recovery trigger for the rest of the run
+  runController({ ...runOptions, target: { tabId, windowId } });
   return { ok: true };
 }
 
-function controlCrawl(action: "pause" | "resume" | "stop"): { ok: boolean } {
+// ── Resume after eviction (FR-EX-080 / C-03 / EC-012) ────────────────────────
+
+/** Rebuild the run described by the checkpoint, or abandon it if any gate says
+ *  we shouldn't. Never call directly — go through ensureResumed(). */
+async function resumeCrawl(): Promise<void> {
+  const c = await readCheckpoint(); // session only — never the local mirror
+  if (!c) {
+    await clearResumeAlarm(); // nothing in flight; stop waking up for nothing
+    return;
+  }
+
+  const veto = resumeVeto(c, await getSessionNonce(), Date.now());
+  if (veto) {
+    await abandonCheckpoint(c, veto);
+    return;
+  }
+
+  // The tab has to still be there. onTabRemoved is registered inside run(), so
+  // during an eviction gap nothing is watching for EC-019 — this is where a tab
+  // closed mid-gap is noticed.
+  const target = c.opts.target!;
+  try {
+    await chrome.tabs.get(target.tabId);
+  } catch {
+    await abandonCheckpoint(c, "crawl tab is gone");
+    return;
+  }
+
+  crawl.progress = c.progress;
+  crawl.result = null;
+  await armResumeAlarm();
+  console.info(`[SnapCrawl] resuming an interrupted crawl (${c.queue.length} states queued).`);
+  runController({ ...c.opts, target }, c);
+}
+
+// Exactly-once resume. Chrome runs a single, single-threaded worker instance, so
+// a module-scope latch assigned SYNCHRONOUSLY (no await between the check and the
+// set) is enough — two triggers firing back to back share the one promise instead
+// of racing two controllers onto the same tab.
+let resumeOnce: Promise<void> | null = null;
+
+function ensureResumed(): Promise<void> {
+  if (crawl.controller) return Promise.resolve();
+  resumeOnce ??= resumeCrawl().finally(() => {
+    resumeOnce = null;
+  });
+  return resumeOnce;
+}
+
+async function controlCrawl(action: "pause" | "resume" | "stop"): Promise<{ ok: boolean }> {
+  // Settle any in-flight resume BEFORE reading crawl.controller. The Stop message
+  // is often the very thing that wakes the worker, so without this the resume is
+  // still parked on an await, we take the no-controller branch below and clear the
+  // checkpoint — and then the resume finishes, re-arms the alarm and starts
+  // clicking the tab again for the crawl the user just stopped.
+  await ensureResumed();
+  // Stop still has to work with no controller: the checkpoint would otherwise sit
+  // there and let the alarm resurrect the run.
+  if (!crawl.controller && action === "stop") {
+    const c = await readCheckpoint();
+    if (!c) return { ok: false };
+    await clearCheckpoint();
+    await clearResumeAlarm();
+    if (c.sessionId) {
+      try {
+        await updateSession(c.sessionId, { status: "cancelled", endReason: "cancelled" });
+      } catch {
+        /* best effort */
+      }
+    }
+    crawl.runState = "cancelled";
+    return { ok: true };
+  }
   if (!crawl.controller) return { ok: false };
   if (action === "pause") {
     crawl.controller.pause();
@@ -210,10 +380,21 @@ function controlCrawl(action: "pause" | "resume" | "stop"): { ok: boolean } {
   return { ok: true };
 }
 
-function crawlStatus(): CrawlStatus {
+async function crawlStatus(): Promise<CrawlStatus> {
+  // A poll is also a wake: without this, a popup opened during an eviction gap
+  // would see runState "idle", show "ready" while a crawl is actually in flight,
+  // and invite the user to start a second one.
+  await ensureResumed();
   const r = crawl.result;
+  // FR-EX-076 — the engine can auto-pause itself (a login/logout landing) without
+  // a control message, so the SW's own runState wouldn't know. Reflect the
+  // controller's live paused state so the popup shows Paused and offers Resume.
+  const runState =
+    crawl.controller && crawl.controller.isPaused && crawl.runState === "running"
+      ? "paused"
+      : crawl.runState;
   return {
-    runState: crawl.runState,
+    runState,
     progress: crawl.progress,
     result: r
       ? {
@@ -221,7 +402,9 @@ function crawlStatus(): CrawlStatus {
           states: r.states,
           pages: r.pages,
           edges: r.edges,
+          abandoned: r.abandoned,
           uploaded: r.uploaded,
+          unreachableRegions: r.unreachableRegions,
           reason: r.reason,
           error: r.error,
           sessionId: r.sessionId,
@@ -305,9 +488,9 @@ async function handle(message: ExtMessage): Promise<unknown> {
     case "EXT_CRAWL_START":
       return await startCrawl(message.startUrl, message.tab, message.runOptions);
     case "EXT_CRAWL_CONTROL":
-      return controlCrawl(message.action);
+      return await controlCrawl(message.action);
     case "EXT_CRAWL_STATUS":
-      return crawlStatus();
+      return await crawlStatus();
 
     default:
       return undefined;
@@ -323,3 +506,27 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, _sender, sendResponse
     );
   return true;
 });
+
+// ── Wake triggers (FR-EX-080 / C-03) ─────────────────────────────────────────
+// Listeners must be registered synchronously at the top level: a woken worker
+// re-runs this module from scratch, and a listener added later can miss the very
+// event that woke it.
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === RESUME_ALARM) void ensureResumed();
+});
+
+// Browser restart. storage.session (and with it every live tab id) is gone, so
+// there is nothing to resume — the mirror exists precisely so we can still close
+// the books on the run instead of leaving its session `running` forever.
+chrome.runtime.onStartup.addListener(() => {
+  void (async () => {
+    const mirrored = await readCheckpointMirror();
+    if (mirrored) await abandonCheckpoint(mirrored, "browser restarted");
+  })();
+});
+
+// A worker woken by anything else at all (a message, a port) still gets a chance
+// to notice an interrupted crawl. The alarm is the backstop when nothing else
+// happens; the latch keeps this from double-starting alongside it.
+void ensureResumed();

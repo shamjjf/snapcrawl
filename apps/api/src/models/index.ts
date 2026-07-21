@@ -8,3 +8,4 @@ export * from "./screen";
 export * from "./edge";
 export * from "./auditLog";
 export * from "./sessionLog";
+export * from "./passwordReset";

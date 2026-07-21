@@ -34,8 +34,11 @@ export const sessionStatsSchema = z.object({
 
 /** Per-run overrides permitted by the popup within project limits (FR-EX-014). */
 export const sessionOverridesSchema = z.object({
-  maxDepth: z.number().int().min(1).max(20).optional(),
-  maxScreens: z.number().int().min(1).max(5000).optional(),
+  /** null = unlimited for this run. Absent = "inherit the project config". The
+   *  two are different: absent leaves the project's ceiling alone, null removes
+   *  it for this run only. Still tighten-only — see tightenLimit. */
+  maxDepth: z.number().int().min(1).max(20).nullable().optional(),
+  maxScreens: z.number().int().min(1).max(5000).nullable().optional(),
   fullPage: z.boolean().optional(),
 });
 
@@ -54,10 +57,20 @@ export const sessionUpdateSchema = z.object({
 
 // ── Response entities (what the API returns; SRS §8.4) ──────────────────────
 
-/** GET /sessions query: cursor pagination scoped to a project (FR-BE-035). */
+/** GET /sessions query: cursor pagination scoped to a project, plus the panel's
+ *  status + calendar-date filters (FR-BE-035, FR-AP-030). */
 export const sessionListQuerySchema = cursorQuerySchema.extend({
   projectId: objectIdSchema,
   cursor: objectIdSchema.optional(),
+  /** Single status — the panel's filter is a single-choice <Select>. */
+  status: sessionStatusSchema.optional(),
+  /** Inclusive calendar-day bounds on createdAt, "YYYY-MM-DD" as produced by
+   *  the panel's <input type="date">. Deliberately kept as strings rather than
+   *  coerced dates: z.coerce.date() would collapse "2026-07-15" to the single
+   *  instant T00:00:00Z and lose the fact that the client meant a whole DAY,
+   *  which is exactly what the `to` bound has to expand to. */
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
 });
 
 /** Full session record returned by the API (SRS §8.4). `configSnapshot` is the
@@ -135,6 +148,85 @@ export const sessionLogBatchSchema = z.object({
 export const sessionLogBatchResponseSchema = z.object({
   recorded: z.number().int().min(0),
 });
+
+// ── Coverage statistics (FR-BE-051) ─────────────────────────────────────────
+
+/** How many distinct states were captured at one crawl depth. */
+export const depthCoverageSchema = z.object({
+  depth: z.number().int().min(0),
+  states: z.number().int().min(0),
+});
+
+/**
+ * GET /sessions/:id/coverage — "how much of the app did this run actually
+ * reach, and how much of the effort was wasted?" (FR-BE-051).
+ *
+ * Computed from the screens and edges on demand rather than counted into
+ * `session.stats` as the crawl runs. Two reasons: `stats` is reported BY the
+ * extension (FR-BE-033), so it is a claim rather than an observation, and it
+ * cannot be recomputed if a batch is lost; and coverage is derived, so storing
+ * it would let it drift out of step with the rows it summarises — a screenshot
+ * deleted under FR-AP-043 silently makes a stored count wrong.
+ */
+export const sessionCoverageSchema = z.object({
+  sessionId: objectIdSchema,
+  /** Distinct page URLs reached. Lower than `uniqueStates` whenever one page
+   *  has several UI states (a modal open, a tab switched). */
+  uniqueUrls: z.number().int().min(0),
+  /** Distinct UI states captured — one screenshot each (FR-BE-041). */
+  uniqueStates: z.number().int().min(0),
+  /** States per depth, ascending, no gaps for depths that were never reached. */
+  statesPerDepth: z.array(depthCoverageSchema),
+  /** Clicks that changed nothing (edge kind "dead") — the crawler's wasted
+   *  effort, and the best single hint at what to add to excludeSelectors. */
+  deadEdges: z.number().int().min(0),
+  totalEdges: z.number().int().min(0),
+  /** Captures skipped at presign because the exact bytes were already stored
+   *  (FR-BE-040 contentHash dedupe). Reported by the extension via stats. */
+  duplicatesSkipped: z.number().int().min(0),
+  /** Stored screens flagged as near-duplicates of another state (FR-BE-043). */
+  nearDuplicates: z.number().int().min(0),
+  /** 0..1: of everything this crawl decided to capture, the fraction that
+   *  turned out to be a repeat. See `computeDuplicateRate` for the arithmetic —
+   *  a rate is meaningless without its denominator written down. */
+  duplicateRate: z.number().min(0).max(1),
+});
+
+export type DepthCoverage = z.infer<typeof depthCoverageSchema>;
+export type SessionCoverage = z.infer<typeof sessionCoverageSchema>;
+
+// ── Session ZIP export (FR-AP-042) ──────────────────────────────────────────
+
+export const exportStatusSchema = z.enum(["pending", "ready", "failed"]);
+
+/**
+ * A server-generated session export (FR-AP-042: "server-generated, asynchronous
+ * with notification when ready").
+ *
+ * The build happens off the request, so this record is the notification channel:
+ * POST returns one as `pending`, and the panel polls GET until it flips to
+ * `ready` and `downloadUrl` (a short-lived signed GET) appears — or `failed`
+ * with a reason. No websocket, no push; a poll is a perfectly good "tell me when
+ * it's done" for a job measured in seconds.
+ */
+export const sessionExportSchema = z.object({
+  id: objectIdSchema,
+  sessionId: objectIdSchema,
+  status: exportStatusSchema,
+  /** Screens written into the ZIP — set once the build starts producing. */
+  screenCount: z.number().int().min(0).nullable().default(null),
+  /** Final ZIP size in bytes; null until `ready`. */
+  bytes: z.number().int().min(0).nullable().default(null),
+  /** Present only when `ready`: a signed URL to download the ZIP (≤ 1 h). */
+  downloadUrl: z.string().nullable().default(null),
+  /** Present only when `failed`: a human-readable reason. */
+  error: z.string().nullable().default(null),
+  createdAt: z.coerce.date(),
+  updatedAt: z.coerce.date(),
+});
+
+export type ExportStatus = z.infer<typeof exportStatusSchema>;
+export type SessionExport = z.infer<typeof sessionExportSchema>;
 
 export type SessionListQuery = z.infer<typeof sessionListQuerySchema>;
 export type Session = z.infer<typeof sessionSchema>;

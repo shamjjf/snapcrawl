@@ -3,6 +3,7 @@ import { tokenCreateSchema } from "@snapcrawl/shared";
 import type { AuthedRequest } from "../../auth";
 import { ApiError } from "../../http/envelope";
 import { asyncHandler, idParam, parseInput, requireUser } from "../../http/validate";
+import { recordAudit } from "../../lib/audit";
 import { generateRawToken, hashToken } from "../../lib/tokens";
 import { ApiTokenModel } from "../../models/apiToken";
 import { serializeToken } from "./service";
@@ -18,6 +19,14 @@ export const createToken = asyncHandler(async (req: AuthedRequest, res: Response
     tokenHash: hashToken(rawToken),
     scopes: ["capture"],
     expiresAt: body.expiresAt,
+  });
+  // FR-BE-012 — a new crawl credential exists; the raw token is never recorded.
+  await recordAudit({
+    action: "token.create",
+    userId: user.id,
+    targetType: "token",
+    targetId: String(doc._id),
+    req,
   });
   res.status(201).json({ token: serializeToken(doc), rawToken });
 });
@@ -40,6 +49,15 @@ export const revokeToken = asyncHandler(async (req: AuthedRequest, res: Response
   if (!doc.revokedAt) {
     doc.revokedAt = new Date();
     await doc.save();
+    // Only on the transition — re-DELETEing an already-revoked token is a no-op,
+    // not a second revocation (FR-BE-012).
+    await recordAudit({
+      action: "token.revoke",
+      userId: user.id,
+      targetType: "token",
+      targetId: id,
+      req,
+    });
   }
   res.status(204).end();
 });

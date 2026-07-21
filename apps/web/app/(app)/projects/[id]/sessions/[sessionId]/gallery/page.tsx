@@ -11,15 +11,16 @@ import {
   Alert,
   Badge,
   Button,
-  Checkbox,
   Input,
   PageHeader,
   PagePlaceholder,
   Select,
   Spinner,
 } from "@/components/ui";
+import { ExportButton } from "@/components/export-button";
 import { ScreenViewer } from "@/components/screen-viewer";
-import { useScreens } from "@/lib/queries";
+import { useSession as useAuthSession } from "@/components/session-provider";
+import { useProject, useScreens } from "@/lib/queries";
 
 export default function GalleryPage() {
   const params = useParams<{ id: string; sessionId: string }>();
@@ -28,15 +29,37 @@ export default function GalleryPage() {
 
   const [url, setUrl] = useState("");
   const [depth, setDepth] = useState("");
-  const [dupOnly, setDupOnly] = useState(false);
+  // "" = all, "true" = near-duplicates only, "false" = originals only. The API's
+  // `duplicate` filter is tri-state now that pHash actually sets isDuplicate
+  // (FR-BE-043), so the UI exposes all three rather than a two-state checkbox.
+  const [dup, setDup] = useState<"" | "true" | "false">("");
+  // FR-EX-090 — a run captures as ONE device, so a session holds one variant.
+  // The tabs let you narrow explicitly; they are not the primary reading of the
+  // data. Not defaulted blindly to desktop: a run is ONE device, so a mobile session's
+  // desktop tab is empty and the placeholder would tell the user to enable a
+  // setting they already used. `null` means "haven't chosen" — the unfiltered
+  // first page decides which tab to open on.
+  const [variant, setVariant] = useState<"desktop" | "mobile" | null>(null);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
 
   const query = useScreens(sessionId, {
     url: url || undefined,
     depth: depth !== "" ? Number(depth) : undefined,
-    duplicate: dupOnly ? true : undefined,
+    duplicate: dup === "" ? undefined : dup === "true",
+    variant: variant ?? undefined,
   });
   const screens = query.data?.pages.flatMap((p) => p.items) ?? [];
+  // Open on whichever device this session actually captured.
+  const activeTab: "desktop" | "mobile" =
+    variant ?? (screens.length > 0 && screens[0].variant === "mobile" ? "mobile" : "desktop");
+
+  // Delete is owner/admin only (mirrors the API's canManage; a viewer or a
+  // non-owner member would get 403). Compute it here so the viewer shows the
+  // button only when it will actually work, rather than showing-and-failing.
+  const { user } = useAuthSession();
+  const project = useProject(projectId);
+  const canDelete =
+    user.role === "admin" || (!!project.data && project.data.ownerId === user.id);
 
   return (
     <>
@@ -52,12 +75,68 @@ export default function GalleryPage() {
         <span>Gallery</span>
       </nav>
 
-      <PageHeader title="Gallery" subtitle="Every unique state captured in this crawl." />
+      <PageHeader
+        title="Gallery"
+        subtitle={
+          activeTab === "mobile"
+            ? "The emulated-phone capture of each state (FR-EX-090)."
+            : "Every unique state captured in this crawl."
+        }
+        actions={<ExportButton sessionId={sessionId} />}
+      />
+
+      {/* FR-EX-090 — Desktop / Mobile tabs. */}
+      <div
+        role="tablist"
+        aria-label="Capture variant"
+        style={{
+          display: "flex",
+          gap: "var(--space-1)",
+          borderBottom: "1px solid var(--color-border)",
+          marginBottom: "var(--space-3)",
+        }}
+      >
+        {(
+          [
+            { key: "desktop", label: "Desktop view" },
+            { key: "mobile", label: "Mobile view" },
+          ] as const
+        ).map((t) => {
+          const selected = activeTab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              onClick={() => {
+                setVariant(t.key);
+                setViewerIndex(null); // indices belong to the old list
+              }}
+              style={{
+                appearance: "none",
+                background: "none",
+                border: "none",
+                borderBottom: `2px solid ${selected ? "var(--color-accent)" : "transparent"}`,
+                color: selected ? "var(--color-text)" : "var(--color-text-muted)",
+                fontWeight: selected ? 600 : 400,
+                fontSize: "var(--text-sm)",
+                padding: "var(--space-2) var(--space-3)",
+                cursor: "pointer",
+              }}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
 
       <div className="filters">
         <Input
           type="search"
-          placeholder="Filter by URL or title…"
+          // URL only: the server filter is a substring match on `url` and does
+          // not look at `title` (GET /sessions/:id/screens ?url=).
+          placeholder="Filter by URL…"
           aria-label="Filter by URL"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
@@ -76,11 +155,16 @@ export default function GalleryPage() {
             </option>
           ))}
         </Select>
-        <Checkbox
-          label="Duplicates only"
-          checked={dupOnly}
-          onChange={(e) => setDupOnly(e.target.checked)}
-        />
+        <Select
+          aria-label="Filter by duplicate flag"
+          value={dup}
+          onChange={(e) => setDup(e.target.value as "" | "true" | "false")}
+          style={{ maxWidth: 170 }}
+        >
+          <option value="">All states</option>
+          <option value="false">Originals only</option>
+          <option value="true">Duplicates only</option>
+        </Select>
       </div>
 
       {query.isLoading ? (
@@ -90,8 +174,18 @@ export default function GalleryPage() {
       ) : query.isError ? (
         <Alert tone="danger">Couldn&apos;t load screenshots.</Alert>
       ) : screens.length === 0 ? (
-        <PagePlaceholder title="No screenshots match">
-          Adjust the filters, or run a crawl to capture states.
+        <PagePlaceholder
+          title={activeTab === "mobile" ? "No mobile captures" : "No screenshots match"}
+        >
+          {activeTab === "mobile" ? (
+            <>
+              This crawl ran in Desktop mode. To capture a phone view, pick{" "}
+              <strong>Mobile</strong> under &ldquo;Capture as&rdquo; in the extension popup and run
+              the crawl again — a run captures one device, so mobile is its own crawl.
+            </>
+          ) : (
+            <>Adjust the filters, or run a crawl to capture states.</>
+          )}
         </PagePlaceholder>
       ) : (
         <>
@@ -116,6 +210,14 @@ export default function GalleryPage() {
                   <span className="thumb__badges">
                     <span className="subtle">d{screen.depth}</span>
                     {screen.isDuplicate ? <Badge tone="neutral">dup</Badge> : null}
+                    {/* FR-EX-090 — the page didn't actually re-render at phone
+                        width, so this is a narrowed desktop layout. Say so on the
+                        tile rather than passing it off as a real mobile render. */}
+                    {screen.variant === "mobile" && screen.mobileReflowed === false ? (
+                      <span title="The page did not re-render for mobile — this is a narrowed desktop layout">
+                        <Badge tone="info">not responsive</Badge>
+                      </span>
+                    ) : null}
                   </span>
                 </span>
               </button>
@@ -142,6 +244,8 @@ export default function GalleryPage() {
           index={viewerIndex}
           onClose={() => setViewerIndex(null)}
           onNavigate={(next) => setViewerIndex(next)}
+          sessionId={sessionId}
+          canDelete={canDelete}
         />
       ) : null}
     </>

@@ -14,11 +14,18 @@ import {
 } from "@/components/ui";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { login, type ApiError } from "@/lib/api";
-import { getToken, setToken } from "@/lib/auth";
+import { clearToken, getToken, setToken } from "@/lib/auth";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type Errors = { email?: string; password?: string; form?: string };
+
+/** Why we're showing the sign-in form with something to say.
+ *  "expired" is a routine timeout; "reuse" means the backend revoked the whole
+ *  token family, so every other tab and device was signed out at the same moment
+ *  — worth saying plainly rather than passing off as an ordinary timeout.
+ *  "reset" is the happy path back from /reset-password (FR-AP-003). */
+type Notice = "expired" | "reuse" | "reset" | null;
 
 /** Where to send the user after login: an internal `?next=` path or the
  *  dashboard. Rejects external/protocol-relative URLs (open-redirect guard). */
@@ -36,16 +43,25 @@ export default function LoginPage() {
   const [showPw, setShowPw] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Errors>({});
-  const [expired, setExpired] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
 
-  // Already signed in? Skip the form. Also surface the "session expired" notice
-  // (FR-AP-004) when we were bounced here by an auto-logout (?expired=1).
+  // Already signed in? Skip the form. Also surface why the session ended
+  // (FR-AP-004, ?expired=1) or that a reset just succeeded (FR-AP-003, ?reset=1).
   useEffect(() => {
+    const qs = new URLSearchParams(window.location.search);
+    // A completed reset revokes every session, so a stale token here is dead —
+    // clear it rather than bouncing them to a dashboard that will 401.
+    if (qs.get("reset") === "1") {
+      clearToken();
+      setNotice("reset");
+      return;
+    }
     if (getToken()) {
       router.replace(nextTarget());
       return;
     }
-    setExpired(new URLSearchParams(window.location.search).get("expired") === "1");
+    if (qs.get("expired") !== "1") return;
+    setNotice(qs.get("reason") === "reuse" ? "reuse" : "expired");
   }, [router]);
 
   function validate(): Errors {
@@ -144,8 +160,20 @@ export default function LoginPage() {
           noValidate
           style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}
         >
-          {expired ? (
+          {notice === "reset" ? (
+            <Alert tone="success">
+              Password updated. Sign in with your new password.
+            </Alert>
+          ) : null}
+          {notice === "expired" ? (
             <Alert tone="info">Your session expired. Please sign in again.</Alert>
+          ) : null}
+          {notice === "reuse" ? (
+            <Alert tone="danger">
+              We ended your session for security, because your sign-in token was
+              used more than once. Any other tabs or devices were signed out too.
+              Please sign in again.
+            </Alert>
           ) : null}
           {errors.form ? <Alert tone="danger">{errors.form}</Alert> : null}
 
@@ -194,6 +222,10 @@ export default function LoginPage() {
             {submitting ? "Signing in…" : "Sign in"}
           </Button>
         </form>
+
+        <p className="subtle" style={{ margin: 0, fontSize: "var(--text-sm)", textAlign: "center" }}>
+          New to SnapCrawl? <Link href="/register">Create an account</Link>
+        </p>
 
         <p
           className="subtle"

@@ -225,14 +225,18 @@ export function Alert({
 export function StatTile({
   label,
   value,
+  hint,
 }: {
   label: string;
   value: ReactNode;
+  /** Optional sub-line under the value, e.g. a denominator or breakdown. */
+  hint?: ReactNode;
 }) {
   return (
     <div className="stat">
       <div className="stat__label">{label}</div>
       <div className="stat__value">{value}</div>
+      {hint ? <div className="stat__hint">{hint}</div> : null}
     </div>
   );
 }
@@ -356,6 +360,19 @@ export function UsersIcon({ size = 18 }: { size?: number }) {
         stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+export function DownloadIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );

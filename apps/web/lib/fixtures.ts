@@ -11,16 +11,21 @@ import {
   apiTokenSchema,
   crawlConfigSchema,
   projectSchema,
+  sessionCoverageSchema,
+  sessionExportSchema,
   tokenCreateResponseSchema,
   type AdminUser,
   type ApiToken,
   type Page,
   type Project,
   type ProjectCreate,
+  type ProjectMember,
   type ProjectUpdate,
   type Screen,
   type Session,
+  type SessionCoverage,
   type SessionEndReason,
+  type SessionExport,
   type SessionLogEntry,
   type SessionStatus,
   type TokenCreate,
@@ -219,7 +224,7 @@ store.projects.slice(0, 4).forEach((proj, pi) => {
     const running = plan.status === "running";
     const startedAt = new Date(createdAt.getTime() + 5000);
     const screenCount = running ? 4 + si * 2 : 8 + ((pi + si) * 3) % 12;
-    const maxDepth = Math.min(proj.config.maxDepth, 1 + ((pi + si) % 4));
+    const maxDepth = Math.min(proj.config.maxDepth ?? 20, 1 + ((pi + si) % 4));
     const endedAt = running ? null : new Date(startedAt.getTime() + screenCount * 4000 + 60_000);
 
     const screens: Screen[] = [];
@@ -244,10 +249,35 @@ store.projects.slice(0, 4).forEach((proj, pi) => {
         width: 1366,
         height: 900,
         fullPage: proj.config.fullPage,
+        variant: "desktop",
+        mobileReflowed: null,
         isDuplicate: k > 0 && k % 5 === 0,
         capturedAt,
         createdAt: capturedAt,
       });
+    }
+    // FR-EX-090 — give roughly every other session a set of mobile companions so
+    // the gallery's Mobile tab has something to show in fixture mode, including
+    // one "did not re-render" case so that badge is exercised too.
+    if ((pi + si) % 2 === 0) {
+      for (const d of [...screens]) {
+        const k = screens.indexOf(d);
+        screens.push({
+          ...d,
+          id: hexId(nextSeq()),
+          fingerprint: hexId(nextSeq()),
+          parentScreenId: d.id, // the desktop twin — how the pair is found
+          triggerElement: null,
+          thumbUrl: svgThumb(pi * 10 + k, `${d.title} (mobile)`, 200, 420),
+          imageUrl: svgThumb(pi * 10 + k, `${d.title} (mobile)`, 390, 844),
+          width: 390,
+          height: 844,
+          fullPage: false,
+          variant: "mobile",
+          mobileReflowed: k % 4 !== 3, // one in four didn't truly re-render
+          isDuplicate: false,
+        });
+      }
     }
     screensBySession[id] = screens;
 
@@ -302,9 +332,12 @@ export async function listProjects(opts?: {
   const q = (opts?.search ?? "").trim().toLowerCase();
   const all = store.projects.filter(
     (p) =>
-      !q ||
-      p.name.toLowerCase().includes(q) ||
-      p.baseUrl.toLowerCase().includes(q),
+      // Soft-deleted projects live in the trash view, not the main list (mirrors
+      // the live endpoint, which filters deletedAt out of every normal read).
+      p.deletedAt == null &&
+      (!q ||
+        p.name.toLowerCase().includes(q) ||
+        p.baseUrl.toLowerCase().includes(q)),
   );
   const start = opts?.cursor ? Number.parseInt(opts.cursor, 10) || 0 : 0;
   const items = all.slice(start, start + PAGE_SIZE);
@@ -332,6 +365,13 @@ export async function createProject(input: ProjectCreate): Promise<Project> {
     baseUrl: input.baseUrl,
     config,
     status: "active",
+    // NFR-020: a new project has not been attested for yet, so the panel should
+    // prompt and the API would 403 a crawl. Mirrors the real backend default.
+    authorisedUse: null,
+    // FR-BE-025: live, so both are null. The real backend only ever returns
+    // non-null here from DELETE /projects/:id and GET /projects/trash.
+    deletedAt: null,
+    purgeDueAt: null,
     createdAt: now,
     updatedAt: now,
     lastRun: null,
@@ -365,10 +405,33 @@ export async function updateProject(
   return updated;
 }
 
+/** NFR-020 attestation. Idempotent, like the real endpoint: re-confirming keeps
+ *  the original `at`/`by` rather than rewriting who attested first. */
+export async function authoriseProject(id: string): Promise<Project> {
+  await delay();
+  let updated: Project | undefined;
+  store.projects = store.projects.map((p) => {
+    if (p.id !== id) return p;
+    updated = p.authorisedUse
+      ? p
+      : { ...p, authorisedUse: { at: new Date(), by: hexId(1) }, updatedAt: new Date() };
+    return updated;
+  });
+  if (!updated) throw { code: "NOT_FOUND", message: "Project not found." };
+  return updated;
+}
+
+/** Mirrors the live DELETE /projects/:id, which SOFT-deletes: sets deletedAt +
+ *  a 7-day purgeDueAt and status "pending-delete", so the project moves to the
+ *  trash (restorable) rather than vanishing. */
 export async function archiveProject(id: string): Promise<void> {
   await delay();
+  const now = new Date();
+  const purge = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   store.projects = store.projects.map((p) =>
-    p.id === id ? { ...p, status: "archived", updatedAt: new Date() } : p,
+    p.id === id
+      ? { ...p, status: "pending-delete", deletedAt: now, purgeDueAt: purge, updatedAt: now }
+      : p,
   );
 }
 
@@ -515,13 +578,13 @@ export async function getSession(id: string): Promise<Session> {
   // Otherwise simulate a live crawl: nudge a running session's stats on each read
   // so the detail page's polling/SSE refresh shows movement (FR-AP-032 demo).
   if (found.status === "running") {
-    const ceiling = Math.min(found.configSnapshot.maxScreens, 40);
+    const ceiling = Math.min(found.configSnapshot.maxScreens ?? 40, 40);
     if (found.stats.screensCaptured < ceiling) {
       found.stats.screensCaptured += 1;
       found.stats.edgesRecorded += 1;
       if (found.stats.screensCaptured % 4 === 0) {
         found.stats.maxDepthReached = Math.min(
-          found.configSnapshot.maxDepth,
+          found.configSnapshot.maxDepth ?? 20,
           found.stats.maxDepthReached + 1,
         );
       }
@@ -605,10 +668,18 @@ export async function listSessionLogs(
 
 export async function listScreens(
   sessionId: string,
-  opts?: { url?: string; depth?: number; duplicate?: boolean; cursor?: string },
+  opts?: {
+    url?: string;
+    depth?: number;
+    duplicate?: boolean;
+    cursor?: string;
+    variant?: "desktop" | "mobile";
+  },
 ): Promise<Page<Screen>> {
   await delay();
-  let all = screensBySession[sessionId] ?? [];
+  // FR-EX-090 — one variant at a time, mirroring screenListFilter on the server.
+  const want = opts?.variant === "mobile" ? "mobile" : "desktop";
+  let all = (screensBySession[sessionId] ?? []).filter((s) => s.variant === want);
   if (opts?.url) {
     const q = opts.url.toLowerCase();
     all = all.filter(
@@ -630,4 +701,122 @@ export async function getScreen(id: string): Promise<Screen> {
     if (found) return found;
   }
   throw { code: "NOT_FOUND", message: "Screen not found." };
+}
+
+export async function deleteScreen(id: string): Promise<void> {
+  await delay();
+  for (const key of Object.keys(screensBySession)) {
+    screensBySession[key] = screensBySession[key].filter((s) => s.id !== id);
+  }
+}
+
+/** Coverage derived from the fixture screens/graph so the panel shows a coherent
+ *  picture (states per depth add up, duplicate rate matches the flagged screens). */
+export async function getSessionCoverage(id: string): Promise<SessionCoverage> {
+  await delay();
+  const screens = screensBySession[id] ?? [];
+  const uniqueUrls = new Set(screens.map((s) => s.url)).size;
+  const perDepth = new Map<number, number>();
+  for (const s of screens) perDepth.set(s.depth, (perDepth.get(s.depth) ?? 0) + 1);
+  const maxDepth = screens.reduce((m, s) => Math.max(m, s.depth), 0);
+  const statesPerDepth = Array.from({ length: maxDepth + 1 }, (_, depth) => ({
+    depth,
+    states: perDepth.get(depth) ?? 0,
+  }));
+  const nearDuplicates = screens.filter((s) => s.isDuplicate).length;
+  const deadEdges = screens.length > 3 ? 1 : 0;
+  const totalEdges = Math.max(0, screens.length - 1) + deadEdges;
+  const duplicatesSkipped = Math.round(screens.length * 0.15);
+  const captureDecisions = screens.length + nearDuplicates + duplicatesSkipped;
+  const duplicateRate =
+    captureDecisions > 0 ? (nearDuplicates + duplicatesSkipped) / captureDecisions : 0;
+  return sessionCoverageSchema.parse({
+    sessionId: id,
+    uniqueUrls,
+    uniqueStates: screens.length,
+    statesPerDepth,
+    deadEdges,
+    totalEdges,
+    duplicatesSkipped,
+    nearDuplicates,
+    duplicateRate,
+  });
+}
+
+/** Fixture export: resolves straight to a `ready` job (no real ZIP), so the
+ *  panel's poll loop completes in one tick and the download button appears. */
+export async function createSessionExport(id: string): Promise<SessionExport> {
+  await delay();
+  const screens = screensBySession[id] ?? [];
+  const now = new Date();
+  return sessionExportSchema.parse({
+    id: hexId(nextSeq()),
+    sessionId: id,
+    status: "ready",
+    screenCount: screens.length,
+    bytes: screens.length * 82_000,
+    downloadUrl: "data:application/zip;base64,UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==",
+    error: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+export async function getSessionExport(id: string, exportId: string): Promise<SessionExport> {
+  return createSessionExport(id).then((j) => ({ ...j, id: exportId }));
+}
+
+/* ── Project members (FR-AP-023) ─────────────────────────────────────── */
+
+/** Resolve a project's owner + member ids to renderable people from the user
+ *  store. Persisted on the fixture project via memberIds so add/remove stick. */
+function memberList(projectId: string): ProjectMember[] {
+  const p = store.projects.find((x) => x.id === projectId);
+  if (!p) return [];
+  const byId = new Map(store.users.map((u) => [u.id, u]));
+  const owner = byId.get(p.ownerId);
+  const rows: ProjectMember[] = [];
+  if (owner) rows.push({ id: owner.id, name: owner.name, email: owner.email, role: owner.role, isOwner: true });
+  for (const mid of p.memberIds) {
+    const u = byId.get(mid);
+    if (u) rows.push({ id: u.id, name: u.name, email: u.email, role: u.role, isOwner: false });
+  }
+  return rows;
+}
+
+export async function listProjectMembers(projectId: string): Promise<ProjectMember[]> {
+  await delay();
+  return memberList(projectId);
+}
+
+export async function addProjectMember(projectId: string, userId: string): Promise<ProjectMember[]> {
+  await delay();
+  const p = store.projects.find((x) => x.id === projectId);
+  if (p && p.ownerId !== userId && !p.memberIds.includes(userId)) {
+    p.memberIds = [...p.memberIds, userId];
+  }
+  return memberList(projectId);
+}
+
+export async function removeProjectMember(projectId: string, userId: string): Promise<ProjectMember[]> {
+  await delay();
+  const p = store.projects.find((x) => x.id === projectId);
+  if (p) p.memberIds = p.memberIds.filter((m) => m !== userId);
+  return memberList(projectId);
+}
+
+/* ── Trash + restore (FR-BE-025) ─────────────────────────────────────── */
+
+export async function listDeletedProjects(): Promise<Project[]> {
+  await delay();
+  return store.projects.filter((p) => p.deletedAt != null);
+}
+
+export async function restoreProject(id: string): Promise<Project> {
+  await delay();
+  const p = store.projects.find((x) => x.id === id);
+  if (!p) throw { code: "NOT_FOUND", message: "Project not found." };
+  const restored = projectSchema.parse({ ...p, deletedAt: null, purgeDueAt: null, status: "active" });
+  store.projects = store.projects.map((x) => (x.id === id ? restored : x));
+  return restored;
 }

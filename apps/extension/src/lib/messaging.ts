@@ -26,7 +26,12 @@ export interface CrawlStatus {
     states: number;
     pages: number;
     edges: number;
+    /** Branches the engine gave up on (FR-EX-084) — surfaced so a thin crawl is
+     *  visibly thin instead of quietly reading as a small site. */
+    abandoned: number;
     uploaded: number;
+    /** FR-EX-023 / C-04 — cross-origin / too-deep iframe regions left uncrawled. */
+    unreachableRegions: number;
     reason: CrawlReason;
     error?: string;
     sessionId: string | null;

@@ -23,11 +23,31 @@ import {
 } from "./upload";
 import { dataUrlToBytes } from "./zip";
 
+/** FR-EX-012 — a run-scoped abort signal so Stop interrupts an in-flight upload.
+ *
+ *  run()'s `raceCancel` wraps sleep/exec/execMain, but NOT uploadCapture — so a
+ *  fetch that never settles (VPN drop, captive portal, black-holed connection)
+ *  left Stop dead indefinitely. maxDurationMin was the de-facto backstop and it
+ *  never fired either: the duration check only runs at overLimit() call sites
+ *  inside the loop. With the limits gone, Stop is the only termination there is,
+ *  so the transport has to be interruptible. */
+let runAbort: AbortSignal | null = null;
+export function setRunAbortSignal(signal: AbortSignal | null): void {
+  runAbort = signal;
+}
+
+/** Ceiling on a single request. Generous — a full-page PNG on a slow link is
+ *  legitimately slow — but finite, so a wedged socket can't outlive the run. */
+const REQUEST_TIMEOUT_MS = 20_000;
+
 const transport: Transport = async (req) => {
+  const signals: AbortSignal[] = [AbortSignal.timeout(REQUEST_TIMEOUT_MS)];
+  if (runAbort) signals.push(runAbort);
   const res = await fetch(req.url, {
     method: req.method,
     headers: req.headers,
     body: req.body as BodyInit | undefined,
+    signal: AbortSignal.any(signals),
   });
   const text = await res.text().catch(() => "");
   return { status: res.status, ok: res.ok, text };

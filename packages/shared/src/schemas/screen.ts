@@ -19,6 +19,11 @@ export const screenSchema = z.object({
   width: z.number().int().nonnegative().nullable().optional(),
   height: z.number().int().nonnegative().nullable().optional(),
   fullPage: z.boolean().default(false),
+  /** FR-EX-090 — "mobile" rows are the emulated-phone companion of a desktop
+   *  capture and are excluded from the gallery/sitemap/coverage by default. */
+  variant: z.enum(["desktop", "mobile"]).default("desktop"),
+  /** FR-EX-090 — false when the page did not truly re-render at phone width. */
+  mobileReflowed: z.boolean().nullable().optional(),
   /** Near/exact-duplicate flag for the gallery filter (FR-BE-043; currently a
    *  placeholder that stays false until pHash detection lands). */
   isDuplicate: z.boolean().default(false),
@@ -41,6 +46,9 @@ export const screenListQuerySchema = cursorQuerySchema.extend({
     .enum(["true", "false"])
     .transform((v) => v === "true")
     .optional(),
+  /** FR-EX-090 — which rendering to list. Defaults to desktop so every existing
+   *  caller keeps counting states; the gallery's Mobile tab passes "mobile". */
+  variant: z.enum(["desktop", "mobile"]).optional(),
 });
 
 export type ScreenListQuery = z.infer<typeof screenListQuerySchema>;

@@ -1,3 +1,4 @@
+import { errorFields, log } from "../../lib/logger";
 import { publishSessionEvent } from "../../lib/sessionEvents";
 import { SessionModel } from "../../models/session";
 import { serializeSession, staleFilter } from "./service";
@@ -28,8 +29,10 @@ export async function markStaleSessions(now: Date): Promise<number> {
         session: serializeSession(updated),
       });
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("[snapcrawl-api] stale-session event emit failed:", err);
+      log.warn("stale-session event emit failed", {
+        sessionId: String(updated._id),
+        ...errorFields(err),
+      });
     }
   }
   return marked;
@@ -39,8 +42,7 @@ export async function markStaleSessions(now: Date): Promise<number> {
 export function startStaleSweeper(): NodeJS.Timeout {
   const timer = setInterval(() => {
     void markStaleSessions(new Date()).catch((err: unknown) => {
-      // eslint-disable-next-line no-console
-      console.warn("[snapcrawl-api] stale-session sweep failed:", err);
+      log.warn("stale-session sweep failed", errorFields(err));
     });
   }, SWEEP_INTERVAL_MS);
   // Don't keep the event loop alive solely for the sweep.

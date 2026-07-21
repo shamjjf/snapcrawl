@@ -5,9 +5,9 @@
 // /me once, redirect unauthenticated visitors to login (preserving where they
 // were headed), and expose { user, logout } to the shell and pages.
 //
-// NOTE: consumes the existing simple-slice auth (localStorage bearer + /me).
-// Silent refresh-token rotation (FR-AP-004) is a separate, planned change and
-// is intentionally NOT done here.
+// Silent access-token refresh (FR-AP-004) lives in lib/api.ts, at the transport
+// layer, so it covers every call rather than just this one — an expired token
+// here is refreshed and retried before it ever surfaces as an error.
 
 import {
   createContext,
@@ -19,8 +19,8 @@ import {
 } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import type { User } from "@snapcrawl/shared";
-import { me } from "@/lib/api";
-import { clearToken, getToken, onUnauthorized } from "@/lib/auth";
+import { logout as apiLogout, me } from "@/lib/api";
+import { clearToken, forceLogout, getToken, syncSessionCookie } from "@/lib/auth";
 import { Alert, Button, Logo, Spinner } from "@/components/ui";
 
 interface SessionValue {
@@ -51,6 +51,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const token = getToken();
+    // The presence cookie is session-scoped, so reopening the browser drops it
+    // while the token survives. Re-sync before anything else, or middleware
+    // would bounce a perfectly valid session to login (FR-AP-002).
+    syncSessionCookie();
     if (!token) {
       router.replace(`/login?next=${encodeURIComponent(entryPath.current)}`);
       return;
@@ -64,11 +68,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setState("ready");
       } catch (err) {
         if (!alive) return;
-        // Invalid/expired token → clear + redirect to login with a message
-        // (FR-AP-004). me() → request() already triggers this; guarded so the
-        // duplicate call here is a no-op.
+        // A surfaced UNAUTHORIZED means the silent refresh already failed inside
+        // request() — the token is unrecoverable. forceLogout is loop-guarded, so
+        // this duplicate call is a no-op after the transport's own (FR-AP-004).
         if ((err as { code?: string })?.code === "UNAUTHORIZED") {
-          onUnauthorized();
+          forceLogout();
           return;
         }
         setState("error");
@@ -82,6 +86,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   function logout() {
+    // Revoke the refresh token server-side (FR-BE-004) — fire-and-forget, since
+    // the cookie is what authenticates it, so clearing the local token first is
+    // safe, and sign-out should never hang on a slow API.
+    void apiLogout();
     clearToken();
     router.replace("/login");
   }

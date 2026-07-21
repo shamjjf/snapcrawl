@@ -98,8 +98,12 @@ a:focus-visible {
   color: var(--color-text);
 }
 .btn--danger {
-  background: var(--color-danger);
-  color: var(--color-on-primary, #fff);
+  /* -emphasis / -on-danger, NOT --color-danger: the latter flips to red-400 in
+     dark (it is the text/border red, for use ON a dark surface), which put white
+     on a light red at 2.77:1 — below AA on the destructive confirm button.
+     --color-danger-emphasis stays red-600 in both themes: 4.83:1 with white. */
+  background: var(--color-danger-emphasis);
+  color: var(--color-on-danger);
 }
 .btn--danger:hover:not([disabled]) {
   filter: brightness(0.94);
@@ -406,8 +410,54 @@ a:focus-visible {
   flex-direction: column;
   min-width: 0;
 }
+/* Authorised-use gate (NFR-020). Deliberately NOT the danger palette: per
+   DESIGN.md §6.2 this records accountability and must read as a considered
+   attestation, not an alarm. Neutral surface, normal text. */
+.authorise-gate {
+  padding: var(--space-5);
+  margin-bottom: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.authorise-gate__title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
+}
+.authorise-gate__body {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  max-width: 68ch;
+}
+
+/* Fixture-mode warning. Sticky above the topbar and not dismissible: fixture
+   mode looks exactly like a working panel, so this is the only thing telling the
+   viewer the projects/sessions/screenshots are invented. Uses the AA-validated
+   danger pair, so it holds contrast in both themes. */
+.fixture-banner {
+  position: sticky;
+  top: 0;
+  z-index: 11;
+  padding: var(--space-2) var(--space-6);
+  background: var(--color-danger-subtle-bg);
+  color: var(--color-danger-subtle-text);
+  border-bottom: 1px solid var(--color-danger);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+.fixture-banner code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
 .app-topbar {
   position: sticky;
+  /* Sits below the fixture banner when it is present; 0 when it is not. */
   top: 0;
   z-index: 10;
   display: flex;
@@ -579,6 +629,14 @@ a:focus-visible {
 .tag__remove:hover {
   background: rgba(0, 0, 0, 0.12);
 }
+/* These buttons are outside .btn/.icon-btn, so without this they fall back to
+   the UA focus ring — which is inconsistent with the rest of the panel and can
+   be low-contrast on a dark surface. DESIGN.md names "same focus ring" a
+   cross-surface invariant (FR-AP-073). */
+.tag__remove:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
 .tag-input__field {
   flex: 1;
   min-width: 120px;
@@ -705,6 +763,11 @@ a:focus-visible {
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
+}
+.toast__close:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: var(--radius-sm);
 }
 @keyframes sc-toast-in {
   from {
@@ -972,6 +1035,10 @@ a:focus-visible {
 .viewer__stage .viewer__nav:last-of-type {
   right: var(--space-3);
 }
+.viewer__nav:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
 .viewer__nav[disabled] {
   opacity: 0.4;
   cursor: not-allowed;
@@ -991,6 +1058,18 @@ a:focus-visible {
   justify-content: space-between;
   gap: var(--space-2);
   color: var(--color-text);
+}
+.viewer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+/* The dialog/viewer containers take tabIndex=-1 only as a focus fallback for the
+   trap (FR-AP-073); never show an outline on the container itself — the controls
+   inside keep their own focus rings. */
+.viewer:focus,
+.dialog:focus {
+  outline: none;
 }
 .viewer__count {
   margin-top: auto;
@@ -1075,6 +1154,116 @@ a:focus-visible {
 }
 .graph-node:hover .graph-node__thumb {
   opacity: 1;
+}
+/* Click-path highlight (FR-AP-051): the selected node and the nodes on its path
+   to the root are emphasised; everything else is faded so the path reads clearly
+   even in a 200-node graph. */
+.graph-node--on-path {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
+.graph-node--selected {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary);
+  background: var(--color-primary-subtle-bg);
+}
+.graph-node--dimmed {
+  opacity: 0.35;
+}
+.graph-hint {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-3);
+  transform: translateX(-50%);
+  z-index: 30;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill, 999px);
+  box-shadow: var(--shadow-sm);
+  pointer-events: none;
+}
+/* Coverage panel (FR-AP-031) — states-per-depth bars + graph-page summary. */
+.stat__hint {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--color-text-subtle);
+}
+.coverage-depths {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.coverage-depth {
+  display: grid;
+  grid-template-columns: 2.5rem 1fr 2.5rem;
+  align-items: center;
+  gap: var(--space-2);
+}
+.coverage-depth__label {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.coverage-depth__track {
+  height: 10px;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--color-surface-2, var(--color-bg));
+  overflow: hidden;
+}
+.coverage-depth__bar {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-primary);
+}
+.coverage-depth__count {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-align: right;
+}
+.coverage-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+.coverage-summary strong {
+  color: var(--color-text);
+}
+/* Project members (FR-AP-023). */
+.member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.member-list__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.member-list__item:last-child {
+  border-bottom: 0;
+}
+.member-list__name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: var(--weight-medium);
+  color: var(--color-text);
 }
 .graph-loading {
   position: absolute;

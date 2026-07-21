@@ -231,7 +231,10 @@ export function App() {
                     </span>
                   </span>
                   <span style={{ marginLeft: "auto" }}>
-                    <Pill tone="neutral">depth {p.config.maxDepth} · {p.config.maxScreens} shots</Pill>
+                    {/* Depth is hidden from the extension surface; screens only. */}
+                    <Pill tone="neutral">
+                      {p.config.maxScreens === null ? "unlimited" : `${p.config.maxScreens} shots`}
+                    </Pill>
                   </span>
                 </label>
               );

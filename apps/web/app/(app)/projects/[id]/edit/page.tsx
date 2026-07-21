@@ -6,6 +6,7 @@
 import { useParams, useRouter } from "next/navigation";
 import { Alert, PageHeader, Spinner } from "@/components/ui";
 import { ProjectForm } from "@/components/project-form";
+import { ProjectMembers } from "@/components/project-members";
 import { useToast } from "@/components/toast";
 import { useProject, useUpdateProject } from "@/lib/queries";
 
@@ -61,6 +62,7 @@ export default function EditProjectPage() {
           })
         }
       />
+      <ProjectMembers project={query.data} />
     </>
   );
 }

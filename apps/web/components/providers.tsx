@@ -18,8 +18,9 @@ import { toEnvelope } from "@/lib/api";
 function QueryProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
   const [client] = useState(() => {
-    // A 401 (UNAUTHORIZED) is handled by onUnauthorized() in lib/api (clear +
-    // redirect to login), so don't toast it or retry it here (FR-AP-004).
+    // An UNAUTHORIZED only reaches here once lib/api's transport has already
+    // tried a silent refresh and given up, and forceLogout() (lib/auth) is
+    // redirecting to login. So don't toast it or retry it here (FR-AP-004).
     const onError = (err: unknown) => {
       const env = toEnvelope(err);
       if (env.code === "UNAUTHORIZED") return;

@@ -1,36 +1,52 @@
 import type { Response } from "express";
-import { sessionListQuerySchema, sessionLogQuerySchema, type SessionStatus } from "@snapcrawl/shared";
+import { z } from "zod";
+import {
+  objectIdSchema,
+  sessionListQuerySchema,
+  sessionLogQuerySchema,
+  type SessionStatus,
+} from "@snapcrawl/shared";
 import type { AuthedRequest } from "../../auth";
 import { ApiError } from "../../http/envelope";
 import { buildPage } from "../../http/pagination";
 import { asyncHandler, idParam, parseInput, requireUser } from "../../http/validate";
+import { recordAudit } from "../../lib/audit";
 import { presignGet } from "../../lib/s3";
 import { publishSessionEvent, subscribeSessionEvents } from "../../lib/sessionEvents";
 import { EdgeModel } from "../../models/edge";
+import { ExportJobModel } from "../../models/exportJob";
 import { ProjectModel } from "../../models/project";
 import { ScreenModel } from "../../models/screen";
 import { SessionModel } from "../../models/session";
 import { SessionLogModel } from "../../models/sessionLog";
 import { thumbKeyOf } from "../captures/service";
 import { visibilityFilter } from "../projects/service";
-import { buildGraph, canCancel, serializeSession, serializeSessionLog } from "./service";
+import { computeCoverage } from "./coverage";
+import { queueExport, serializeExport, withDownloadUrl } from "./export";
+
+const exportParam = z.object({ id: objectIdSchema, exportId: objectIdSchema });
+import {
+  buildGraph,
+  canCancel,
+  serializeSession,
+  serializeSessionLog,
+  sessionListFilter,
+} from "./service";
 
 // GET /sessions?projectId= — cursor-paginated, newest first, project-scoped and
-// visibility-checked (FR-BE-035).
+// visibility-checked, with ?status= and ?from=/?to= day filters (FR-BE-035).
 export const listSessions = asyncHandler(async (req: AuthedRequest, res: Response) => {
   const user = requireUser(req);
-  const { projectId, limit, cursor } = parseInput(sessionListQuerySchema, req.query);
+  const q = parseInput(sessionListQuerySchema, req.query);
 
   // Confirm the caller can see the project (else 404 — no existence leak).
-  const project = await ProjectModel.findOne({ _id: projectId, ...visibilityFilter(user) });
+  const project = await ProjectModel.findOne({ _id: q.projectId, ...visibilityFilter(user) });
   if (!project) throw new ApiError(404, "NOT_FOUND", "Project not found.");
 
-  const filter: Record<string, unknown> = { projectId };
-  if (cursor) filter._id = { $lt: cursor };
-  const docs = await SessionModel.find(filter)
+  const docs = await SessionModel.find(sessionListFilter(q.projectId, q))
     .sort({ _id: -1 })
-    .limit(limit + 1);
-  res.json(buildPage(docs, limit, serializeSession));
+    .limit(q.limit + 1);
+  res.json(buildPage(docs, q.limit, serializeSession));
 });
 
 // GET /sessions/:id — full detail incl. config snapshot (FR-BE-035).
@@ -88,8 +104,71 @@ export const cancelSession = asyncHandler(async (req: AuthedRequest, res: Respon
     session.cancelRequested = true;
     await session.save();
     publishSessionEvent(id, { type: "status", session: serializeSession(session) });
+    // Only on the transition (FR-BE-012) — cancelling an already-cancelling
+    // session is idempotent, not a second event.
+    await recordAudit({
+      action: "session.cancel",
+      userId: requireUser(req).id,
+      targetType: "session",
+      targetId: id,
+      req,
+    });
   }
   res.json(serializeSession(session));
+});
+
+// GET /sessions/:id/coverage — how much of the app this run reached, and how
+// much of the clicking was wasted (FR-BE-051). Derived on read; see ./coverage.
+export const getSessionCoverage = asyncHandler(async (req: AuthedRequest, res: Response) => {
+  const { id } = parseInput(idParam, req.params);
+  const session = await visibleSession(req, id);
+  res.json(await computeCoverage(session));
+});
+
+// ── ZIP export (FR-AP-042) ──────────────────────────────────────────────────
+
+// POST /sessions/:id/export — start (or reuse) an async ZIP build of the
+// session's screenshots. Returns the job so the panel can poll it.
+export const createSessionExport = asyncHandler(async (req: AuthedRequest, res: Response) => {
+  const user = requireUser(req);
+  const { id } = parseInput(idParam, req.params);
+  const session = await visibleSession(req, id);
+
+  // Reuse an in-progress or finished build rather than spawning a duplicate: a
+  // double-click, or a poll that races the create, must not kick off a second
+  // gigabyte upload of the same session. A `failed` job is not reused — that
+  // one should be retryable.
+  const existing = await ExportJobModel.findOne({
+    sessionId: session._id,
+    status: { $in: ["pending", "ready"] },
+  }).sort({ _id: -1 });
+  if (existing) {
+    res.status(200).json(await withDownloadUrl(existing));
+    return;
+  }
+
+  const job = await ExportJobModel.create({
+    sessionId: session._id,
+    projectId: session.projectId,
+    userId: user.id,
+  });
+  queueExport(String(job._id));
+  res.status(202).json(serializeExport(job));
+});
+
+// GET /sessions/:id/exports/:exportId — poll one export; carries a signed
+// download URL once ready. This is the "notification when ready" (FR-AP-042).
+export const getSessionExport = asyncHandler(async (req: AuthedRequest, res: Response) => {
+  const { id, exportId } = parseInput(exportParam, req.params);
+  const session = await visibleSession(req, id);
+  const job = await ExportJobModel.findOne({ _id: exportId, sessionId: session._id });
+  if (!job) throw new ApiError(404, "NOT_FOUND", "Export not found.");
+
+  // A pending job that isn't actually building (dropped over the concurrency
+  // ceiling, or a worker that died) gets nudged back into the queue on read.
+  // queueExport no-ops if it is genuinely in flight, so this cannot double-run.
+  if (job.status === "pending") queueExport(String(job._id));
+  res.json(await withDownloadUrl(job));
 });
 
 // GET /sessions/:id/graph — render-ready nodes (screens + signed thumbs) and

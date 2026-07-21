@@ -14,6 +14,7 @@ import { sessionSchema } from "@snapcrawl/shared";
 import type {
   ProjectCreate,
   ProjectUpdate,
+  SessionStatus,
   TokenCreate,
   UserCreate,
   UserUpdate,
@@ -25,17 +26,33 @@ function token(): string {
   return getToken() ?? "";
 }
 
-type SessionFilters = { status?: string; from?: string; to?: string };
-type ScreenFilters = { url?: string; depth?: number; duplicate?: boolean };
+/**
+ * GET /sessions filters (FR-AP-030), mirroring the shared `sessionListQuerySchema`.
+ * `status` is the shared union, not a loose string: the server now 400s an
+ * unknown status instead of ignoring it, so a typo should fail at compile time
+ * rather than as a toast. `from`/`to` are inclusive calendar days ("YYYY-MM-DD",
+ * exactly what <input type="date"> emits) applied to createdAt.
+ */
+type SessionFilters = { status?: SessionStatus; from?: string; to?: string };
+type ScreenFilters = {
+  url?: string;
+  depth?: number;
+  duplicate?: boolean;
+  /** FR-EX-090 — desktop (default) or the mobile companions. */
+  variant?: "desktop" | "mobile";
+};
 
 const keys = {
   projects: (search: string) => ["projects", { search }] as const,
   project: (id: string) => ["project", id] as const,
+  projectMembers: (id: string) => ["project-members", id] as const,
+  trash: () => ["projects-trash"] as const,
   tokens: () => ["tokens"] as const,
   users: (search: string) => ["users", { search }] as const,
   sessions: (projectId: string, f: SessionFilters) => ["sessions", projectId, f] as const,
   session: (id: string) => ["session", id] as const,
   sessionLogs: (id: string) => ["session-logs", id] as const,
+  sessionCoverage: (id: string) => ["session-coverage", id] as const,
   screens: (sessionId: string, f: ScreenFilters) => ["screens", sessionId, f] as const,
 };
 
@@ -67,6 +84,19 @@ export function useCreateProject() {
   });
 }
 
+/** Record the NFR-020 authorised-use attestation for a project (C-07). */
+export function useAuthoriseProject(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.authoriseProject(token(), id),
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: ["projects"] }),
+        qc.invalidateQueries({ queryKey: keys.project(id) }),
+      ]),
+  });
+}
+
 export function useUpdateProject(id: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -83,7 +113,62 @@ export function useArchiveProject() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.archiveProject(token(), id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
+    // DELETE soft-deletes to trash (FR-BE-025), so refresh both the main list
+    // (it leaves) and the trash (it arrives).
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: ["projects"] }),
+        qc.invalidateQueries({ queryKey: keys.trash() }),
+      ]),
+  });
+}
+
+/* ── Project members (FR-AP-023 → FR-BE-024) ─────────────────────────── */
+
+export function useProjectMembers(projectId: string) {
+  return useQuery({
+    queryKey: keys.projectMembers(projectId),
+    queryFn: () => api.listProjectMembers(token(), projectId),
+    enabled: Boolean(projectId),
+  });
+}
+
+export function useAddProjectMember(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => api.addProjectMember(token(), projectId, userId),
+    // The endpoint returns the fresh list, so seed the cache directly and skip a
+    // round trip.
+    onSuccess: (members) => qc.setQueryData(keys.projectMembers(projectId), members),
+  });
+}
+
+export function useRemoveProjectMember(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => api.removeProjectMember(token(), projectId, userId),
+    onSuccess: (members) => qc.setQueryData(keys.projectMembers(projectId), members),
+  });
+}
+
+/* ── Trash + restore (FR-BE-025) ─────────────────────────────────────── */
+
+export function useDeletedProjects() {
+  return useQuery({
+    queryKey: keys.trash(),
+    queryFn: () => api.listDeletedProjects(token()),
+  });
+}
+
+export function useRestoreProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.restoreProject(token(), id),
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: ["projects"] }),
+        qc.invalidateQueries({ queryKey: keys.trash() }),
+      ]),
   });
 }
 
@@ -142,14 +227,20 @@ export function useUpdateUser() {
 
 /* ── Sessions + screens (FR-AP-030/031/040/041) ──────────────────── */
 
-export function useSessions(projectId: string, filters: SessionFilters) {
+export function useSessions(
+  projectId: string,
+  filters: SessionFilters,
+  // `enabled` is a caller-side gate (e.g. an inverted date range that cannot
+  // match). Kept out of `filters` so it never reaches the query key or the wire.
+  opts?: { enabled?: boolean },
+) {
   return useInfiniteQuery({
     queryKey: keys.sessions(projectId, filters),
     queryFn: ({ pageParam }) =>
       api.listSessions(token(), projectId, { ...filters, cursor: pageParam }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
-    enabled: Boolean(projectId),
+    enabled: Boolean(projectId) && (opts?.enabled ?? true),
   });
 }
 
@@ -243,5 +334,53 @@ export function useScreens(sessionId: string, filters: ScreenFilters) {
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     enabled: Boolean(sessionId),
+  });
+}
+
+/** Coverage stats for a session (FR-AP-031 → FR-BE-051). */
+export function useSessionCoverage(id: string) {
+  return useQuery({
+    queryKey: keys.sessionCoverage(id),
+    queryFn: () => api.getSessionCoverage(token(), id),
+    enabled: Boolean(id),
+  });
+}
+
+/** Delete one screenshot (FR-AP-043). Invalidates the gallery for this session
+ *  and the coverage (a removed state lowers uniqueStates), plus the session's own
+ *  captured count. `sessionId` is passed so we invalidate the right lists. */
+export function useDeleteScreen(sessionId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (screenId: string) => api.deleteScreen(token(), screenId),
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: ["screens", sessionId] }),
+        qc.invalidateQueries({ queryKey: keys.sessionCoverage(sessionId) }),
+        qc.invalidateQueries({ queryKey: keys.session(sessionId) }),
+      ]),
+  });
+}
+
+/** Start (or re-attach to) the session ZIP export (FR-AP-042). */
+export function useStartSessionExport(sessionId: string) {
+  return useMutation({
+    mutationFn: () => api.createSessionExport(token(), sessionId),
+  });
+}
+
+/**
+ * Poll a running export job until it is `ready` or `failed` (FR-AP-042). The
+ * backend build is measured in seconds, so a 1.5 s poll is a good "tell me when
+ * it's done"; it stops the instant the job leaves `pending`. `enabled` is false
+ * until a job has actually been created.
+ */
+export function useSessionExportJob(sessionId: string, exportId: string | null) {
+  return useQuery({
+    queryKey: ["session-export", sessionId, exportId],
+    queryFn: () => api.getSessionExport(token(), sessionId, exportId as string),
+    enabled: Boolean(sessionId && exportId),
+    refetchInterval: (query) =>
+      query.state.data && query.state.data.status === "pending" ? 1500 : false,
   });
 }

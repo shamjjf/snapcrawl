@@ -18,6 +18,7 @@ import {
   UsersIcon,
 } from "@/components/ui";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { FixtureBanner } from "@/components/fixture-banner";
 
 type NavItem = {
   href: string;
@@ -96,6 +97,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="app-body">
+        {/* Above the topbar so it is the first thing on the page in fixture
+            mode, and part of the scroll container so it cannot be scrolled away. */}
+        <FixtureBanner />
         <header className="app-topbar">
           <button
             type="button"

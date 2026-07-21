@@ -1,13 +1,13 @@
 // Per-user workspace KPIs for the dashboard (FR-AP-010). Scoped to what the
 // caller may see: admins see everything; members see only projects they own or
 // are assigned to (consistent with FR-BE-020), and their sessions/screens.
-import type { User } from "@snapcrawl/shared";
+import type { Dashboard, User } from "@snapcrawl/shared";
 import { ProjectModel, ScreenModel, SessionModel } from "./models";
 import { visibilityFilter } from "./modules/projects/service";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
-export async function getDashboard(user: User, now: Date = new Date()) {
+export async function getDashboard(user: User, now: Date = new Date()): Promise<Dashboard> {
   const since = new Date(now.getTime() - THIRTY_DAYS_MS);
 
   // Projects the caller can see, then scope sessions/screens to those projects.
@@ -16,11 +16,37 @@ export async function getDashboard(user: User, now: Date = new Date()) {
   const scope =
     user.role === "admin" ? {} : { projectId: { $in: projectIds } };
 
-  const [sessionsLast30Days, screensCaptured, recent] = await Promise.all([
+  const [sessionsLast30Days, screenTotals, recent] = await Promise.all([
     SessionModel.countDocuments({ ...scope, createdAt: { $gte: since } }),
-    ScreenModel.countDocuments(scope),
+    // Count + storage in ONE pass over the same scope.
+    //
+    // Two traps here. (1) $match MUST reuse `scope`, not a re-derived
+    // {projectId: {$in: …}}: for admins `scope` is {} and matches screens whose
+    // project was deleted, so re-deriving would make storage exclude orphans
+    // while the count includes them — two tiles on one card disagreeing.
+    // (2) Separate $sum accumulators, NOT $sum:{$add:["$bytes","$thumbBytes"]}
+    // — $add returns null if ANY operand is missing, so every row without a
+    // thumbnail would contribute null and discard its original bytes too.
+    ScreenModel.aggregate<{ count: number; bytes: number; thumbBytes: number }>([
+      { $match: scope },
+      {
+        $group: {
+          _id: null,
+          count: { $sum: 1 },
+          bytes: { $sum: "$bytes" },
+          thumbBytes: { $sum: "$thumbBytes" },
+        },
+      },
+    ]),
     SessionModel.find(scope).sort({ createdAt: -1 }).limit(5).populate("projectId", "name"),
   ]);
+
+  // An aggregate over zero matched docs returns [], not [{bytes:0}] — so a
+  // fresh workspace (or a member with no projects) would throw on rows[0].bytes.
+  const totals = screenTotals[0];
+  const screensCaptured = totals?.count ?? 0;
+  // Storage used = originals + thumbnails; both occupy the bucket.
+  const storageBytes = (totals?.bytes ?? 0) + (totals?.thumbBytes ?? 0);
 
   const recentSessions = recent.map((s) => {
     const project = s.projectId as unknown as { _id?: unknown; name?: string } | null;
@@ -42,8 +68,7 @@ export async function getDashboard(user: User, now: Date = new Date()) {
       projects: projectDocs.length,
       sessionsLast30Days,
       screensCaptured,
-      // Screens store dimensions, not byte size, so storage isn't tracked yet.
-      storageBytes: 0,
+      storageBytes,
     },
     recentSessions,
   };

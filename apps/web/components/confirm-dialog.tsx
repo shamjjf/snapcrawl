@@ -3,9 +3,15 @@
 // Confirmation dialog. When `requireText` is set, the confirm button stays
 // disabled until the user types that exact string — used for destructive
 // project actions where the project name must be typed (FR-AP-022).
+//
+// `canConfirm` is the same idea for a caller that gates on something other than
+// typed text — the NFR-020 attestation gates on a checkbox. Kept as one dialog
+// rather than a second implementation so the focus trap, Esc handling and modal
+// semantics can't drift apart.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, Input } from "@/components/ui";
+import { useFocusTrap } from "@/lib/use-focus-trap";
 
 export function ConfirmDialog({
   open,
@@ -14,6 +20,7 @@ export function ConfirmDialog({
   confirmLabel = "Confirm",
   tone = "danger",
   requireText,
+  canConfirm = true,
   busy = false,
   onConfirm,
   onCancel,
@@ -25,16 +32,22 @@ export function ConfirmDialog({
   tone?: "danger" | "primary";
   /** If set, the user must type this exact value to enable the confirm button. */
   requireText?: string;
+  /** Caller-side gate on the confirm button, ANDed with `requireText`. */
+  canConfirm?: boolean;
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   const [typed, setTyped] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   // Reset the typed value each time the dialog opens.
   useEffect(() => {
     if (open) setTyped("");
   }, [open]);
+
+  // Focus in on open, trap Tab, Esc to cancel, focus back on close (FR-AP-073).
+  useFocusTrap(dialogRef, onCancel, open);
 
   if (!open) return null;
 
@@ -43,6 +56,8 @@ export function ConfirmDialog({
   return (
     <div className="dialog-backdrop" onClick={onCancel}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         className="dialog card"
         role="dialog"
         aria-modal="true"
@@ -74,7 +89,7 @@ export function ConfirmDialog({
           <Button
             variant={tone}
             onClick={onConfirm}
-            disabled={!matches || busy}
+            disabled={!matches || !canConfirm || busy}
             loading={busy}
           >
             {confirmLabel}

@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Alert, PageHeader, PagePlaceholder, Spinner } from "@/components/ui";
+import { CoverageSummary } from "@/components/coverage-panel";
 import { useSessionGraph } from "@/lib/queries";
 
 const SessionGraph = dynamic(
@@ -47,6 +48,10 @@ export default function GraphPage() {
         title="Sitemap"
         subtitle="Every captured state and the clicks that reached it. Hover a node for its thumbnail; click to open it."
       />
+
+      {/* Duplicate rate + dead-edge summary from the coverage endpoint (FR-BE-051):
+          the numbers that explain the repeats and dead-end stubs in the graph. */}
+      {graph && graph.nodes.length > 0 ? <CoverageSummary sessionId={sessionId} /> : null}
 
       {q.isLoading ? (
         <div className="loading-row">

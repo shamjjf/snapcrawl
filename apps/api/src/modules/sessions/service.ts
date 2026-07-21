@@ -1,6 +1,8 @@
 import {
   crawlConfigSchema,
+  legacyConfigSchema,
   sessionStatsSchema,
+  tightenLimit,
   type CrawlConfig,
   type EdgeKind,
   type Session,
@@ -73,14 +75,50 @@ export function staleFilter(
   };
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Turn the panel's inclusive calendar-day bounds into a UTC instant range
+ *  (FR-BE-035, FR-AP-030). `from` is inclusive from 00:00:00.000Z of that day;
+ *  `to` is inclusive to the END of its day, expressed half-open as `< to+1d`.
+ *
+ *  The end-of-day expansion is load-bearing, not a nicety: "2026-07-15" parses
+ *  to UTC midnight, so a naive `createdAt <= to` would make the very common
+ *  from=to=today selection match nothing and read as broken. Pure. */
+export function sessionDateRange(from?: string, to?: string): Record<string, Date> | undefined {
+  const range: Record<string, Date> = {};
+  if (from) range.$gte = new Date(`${from}T00:00:00.000Z`);
+  if (to) range.$lt = new Date(new Date(`${to}T00:00:00.000Z`).getTime() + DAY_MS);
+  return Object.keys(range).length > 0 ? range : undefined;
+}
+
+/** Build the GET /sessions Mongo filter: project scope + status + createdAt day
+ *  range + `_id` cursor (FR-BE-035). Filtering on createdAt (not startedAt) is
+ *  deliberate — startedAt is null until a session runs, so a date range keyed on
+ *  it would make `status=pending` + any date return nothing, forever. Pure. */
+export function sessionListFilter(
+  projectId: string,
+  opts: { status?: SessionStatus; from?: string; to?: string; cursor?: string },
+): Record<string, unknown> {
+  const filter: Record<string, unknown> = { projectId };
+  if (opts.cursor) filter._id = { $lt: opts.cursor };
+  if (opts.status) filter.status = opts.status;
+  const createdAt = sessionDateRange(opts.from, opts.to);
+  if (createdAt) filter.createdAt = createdAt;
+  return filter;
+}
+
 /** Immutable config snapshot at session start (FR-BE-030). Per-run overrides may
  *  only tighten maxDepth/maxScreens (never raise them) and may set fullPage
  *  (FR-EX-014). */
 export function snapshotConfig(base: CrawlConfig, overrides?: SessionOverrides): CrawlConfig {
   const snap: CrawlConfig = { ...base };
-  if (overrides?.maxDepth !== undefined) snap.maxDepth = Math.min(overrides.maxDepth, base.maxDepth);
+  // tightenLimit, NOT Math.min: null means unlimited, and Math.min(null, 200) is
+  // 0 — which would have produced a session that captures nothing and ends as
+  // limit-reached on its very first check. The lattice keeps the tighten-only
+  // rule in both directions (see tightenLimit).
+  if (overrides?.maxDepth !== undefined) snap.maxDepth = tightenLimit(overrides.maxDepth, base.maxDepth);
   if (overrides?.maxScreens !== undefined) {
-    snap.maxScreens = Math.min(overrides.maxScreens, base.maxScreens);
+    snap.maxScreens = tightenLimit(overrides.maxScreens, base.maxScreens);
   }
   if (overrides?.fullPage !== undefined) snap.fullPage = overrides.fullPage;
   return snap;
@@ -96,7 +134,9 @@ export function serializeSession(s: SessionDoc): Session {
     tokenId: s.tokenId ? String(s.tokenId) : null,
     status: s.status as SessionStatus,
     // Default an empty/missing snapshot to config defaults rather than throwing.
-    configSnapshot: crawlConfigSchema.parse(o.configSnapshot ?? {}),
+    // legacyConfigSchema, not crawlConfigSchema: this is a HISTORICAL snapshot and
+    // must not inherit today's unlimited default (FR-BE-030). See its comment.
+    configSnapshot: legacyConfigSchema.parse(o.configSnapshot ?? {}),
     stats: sessionStatsSchema.parse(o.stats ?? {}),
     startedAt: s.startedAt ?? null,
     endedAt: s.endedAt ?? null,
@@ -118,10 +158,21 @@ export interface SessionLogDocInput {
   at: Date;
 }
 
+/** Base `seq` of a range reserved by an atomic $inc. The $inc returns the
+ *  counter AFTER incrementing, so a reservation of `count` slots ending at
+ *  `counterAfterInc` starts at `counterAfterInc - count`. Pure (FR-EX-084). */
+export function reservedBase(counterAfterInc: number, count: number): number {
+  return counterAfterInc - count;
+}
+
 /**
  * Shape a batch of client log lines into ordered documents (FR-EX-082/084).
- * `seq` continues from the session's current line count so ordering stays stable
- * across batches and service-worker resumes; `at` falls back to `now`. Pure.
+ * `seq` numbers the batch from `base`, which the caller reserves atomically;
+ * `at` falls back to `now`. Pure.
+ *
+ * `seq` is strictly increasing and unique per session, but NOT dense: a
+ * reserved range is consumed even if its insert fails, so gaps are expected and
+ * max(seq) is not a line count.
  */
 export function buildSessionLogDocs(
   sessionId: unknown,

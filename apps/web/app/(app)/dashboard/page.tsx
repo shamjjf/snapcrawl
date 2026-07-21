@@ -2,14 +2,22 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getDashboard, type DashboardData } from "@/lib/api";
+import type { Dashboard } from "@snapcrawl/shared";
+import { getDashboard } from "@/lib/api";
 import { getToken } from "@/lib/auth";
 import { useSession } from "@/components/session-provider";
 import { Alert, PageHeader, Spinner, StatTile, StatusChip } from "@/components/ui";
 
+/** Format a byte count. Needs the small units: a workspace with a few hundred
+ *  KB of screenshots is the common case, and rounding those to "0 MB" reads as
+ *  a broken tile rather than a small one. */
 function fmtBytes(n: number): string {
-  const gb = n / 1e9;
-  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`;
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(Math.floor(Math.log10(n) / 3), units.length - 1);
+  const v = n / 1000 ** i;
+  // One decimal below GB reads as noise; above it, it's the difference that matters.
+  return `${v.toFixed(i === 0 ? 0 : v < 10 ? 1 : 0)} ${units[i]}`;
 }
 function fmtDate(iso: string): string {
   const d = new Date(iso);
@@ -24,7 +32,7 @@ function fmtDate(iso: string): string {
 
 export default function DashboardPage() {
   const { user } = useSession();
-  const [data, setData] = useState<DashboardData | null>(null);
+  const [data, setData] = useState<Dashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 

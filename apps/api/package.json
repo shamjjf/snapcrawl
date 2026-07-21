@@ -7,12 +7,16 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "seed:admin": "tsx src/scripts/seed-admin.ts",
+    "backfill": "tsx src/scripts/backfill.ts",
+    "unlimit-projects": "tsx src/scripts/unlimit-projects.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1085.0",
+    "@aws-sdk/lib-storage": "3.1088.0",
     "@aws-sdk/s3-request-presigner": "^3.1085.0",
     "@snapcrawl/shared": "*",
+    "archiver": "7.0.1",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
@@ -20,13 +24,17 @@
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.7.4",
+    "nodemailer": "9.0.3",
+    "sharp": "^0.34.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/archiver": "6.0.3",
     "@types/cors": "latest",
     "@types/express": "latest",
     "@types/jsonwebtoken": "latest",
     "@types/node": "^26",
+    "@types/nodemailer": "8.0.1",
     "tsx": "^4.23.0",
     "typescript": "^5"
   }

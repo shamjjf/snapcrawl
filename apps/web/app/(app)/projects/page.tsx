@@ -31,20 +31,20 @@ function statusTone(status: Project["status"]): "success" | "neutral" | "danger"
 export default function ProjectsPage() {
   const toast = useToast();
   const [search, setSearch] = useState("");
-  const [toArchive, setToArchive] = useState<Project | null>(null);
+  const [toDelete, setToDelete] = useState<Project | null>(null);
 
   const query = useProjects(search);
   const archive = useArchiveProject();
 
   const projects = query.data?.pages.flatMap((p) => p.items) ?? [];
 
-  function confirmArchive() {
-    if (!toArchive) return;
-    const name = toArchive.name;
-    archive.mutate(toArchive.id, {
+  function confirmDelete() {
+    if (!toDelete) return;
+    const name = toDelete.name;
+    archive.mutate(toDelete.id, {
       onSuccess: () => {
-        toast.success(`Archived "${name}".`);
-        setToArchive(null);
+        toast.success(`Moved "${name}" to the trash.`);
+        setToDelete(null);
       },
     });
   }
@@ -55,9 +55,14 @@ export default function ProjectsPage() {
         title="Projects"
         subtitle="Define and configure crawl targets."
         actions={
-          <Link href="/projects/new" className="btn btn--primary btn--md">
-            New project
-          </Link>
+          <span style={{ display: "inline-flex", gap: "var(--space-2)" }}>
+            <Link href="/projects/trash" className="btn btn--secondary btn--md">
+              Trash
+            </Link>
+            <Link href="/projects/new" className="btn btn--primary btn--md">
+              New project
+            </Link>
+          </span>
         }
       />
 
@@ -131,11 +136,9 @@ export default function ProjectsPage() {
                         <Link href={`/projects/${p.id}/edit`} className="btn btn--ghost btn--sm">
                           Edit
                         </Link>
-                        {p.status !== "archived" ? (
-                          <Button variant="ghost" size="sm" onClick={() => setToArchive(p)}>
-                            Archive
-                          </Button>
-                        ) : null}
+                        <Button variant="ghost" size="sm" onClick={() => setToDelete(p)}>
+                          Delete
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -159,17 +162,17 @@ export default function ProjectsPage() {
       )}
 
       <ConfirmDialog
-        open={!!toArchive}
-        title="Archive project"
-        confirmLabel="Archive project"
-        requireText={toArchive?.name}
+        open={!!toDelete}
+        title="Delete project"
+        confirmLabel="Delete project"
+        requireText={toDelete?.name}
         busy={archive.isPending}
-        onConfirm={confirmArchive}
-        onCancel={() => setToArchive(null)}
+        onConfirm={confirmDelete}
+        onCancel={() => setToDelete(null)}
       >
         <p style={{ margin: 0 }}>
-          Archiving hides <strong>{toArchive?.name}</strong> from active use. Its sessions and
-          screenshots are kept.
+          Move <strong>{toDelete?.name}</strong> to the trash. Its sessions and screenshots are
+          kept, and you can restore it for 7 days before it&apos;s permanently deleted.
         </p>
       </ConfirmDialog>
     </>

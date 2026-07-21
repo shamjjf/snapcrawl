@@ -55,18 +55,43 @@ export function injectionErrorMessage(url: string): string {
   return `SnapCrawl couldn't access ${host || "this site"} (permission or injection blocked). Grant access and try again.`;
 }
 
+/** The only host permission that lets a crawl take screenshots — see below. */
+export const CAPTURE_ORIGIN = "<all_urls>";
+
 /**
  * Request host access for a crawl. MUST be called from a user gesture (the popup
  * Start handler) — chrome.permissions.request silently fails without one, and the
  * service worker has no gesture. `request()` resolves true without prompting when
  * access is already granted, so no separate `contains()` pre-check is needed
  * (which would risk losing the gesture to an extra await).
+ *
+ * Why `<all_urls>` rather than the crawl's own origins (which is what this did
+ * until a real-browser run proved it couldn't work): `chrome.tabs.captureVisibleTab`
+ * accepts ONLY the literal `<all_urls>` permission or `activeTab`. Verified in
+ * Chrome 150 — with host_permissions granted for the exact target origin, and
+ * `permissions.contains({origins:[target]})` returning true, capture still throws
+ * "Either the '<all_urls>' or 'activeTab' permission is required." An all-hosts
+ * match pattern (the wildcard scheme/host/path form this used to declare) fails
+ * exactly the same way — only the literal token works.
+ *
+ * And `activeTab` is no use to a crawler: it is granted only by a click
+ * on the toolbar icon and lapses as soon as the tab navigates, which a crawl does
+ * constantly (it even reloads the tab at Start). Per-origin access is enough for
+ * executeScript but silently yields a crawl that screenshots nothing — which is
+ * the entire product.
+ *
+ * This is a broad grant and the prompt says so. The crawl is still confined by the
+ * project's allowedDomains (FR-EX-010/071), which is a separate mechanism that
+ * gates every navigation regardless of what Chrome permits.
  */
 export function requestCrawlAccess(
-  startUrl: string,
-  allowedDomains: readonly string[],
+  _startUrl: string,
+  _allowedDomains: readonly string[],
 ): Promise<boolean> {
-  const origins = crawlOrigins(startUrl, allowedDomains);
-  if (origins.length === 0) return Promise.resolve(true);
-  return chrome.permissions.request({ origins });
+  return chrome.permissions.request({ origins: [CAPTURE_ORIGIN] });
+}
+
+/** Does the extension already hold the access a crawl needs? (No gesture needed.) */
+export function hasCrawlAccess(): Promise<boolean> {
+  return chrome.permissions.contains({ origins: [CAPTURE_ORIGIN] });
 }

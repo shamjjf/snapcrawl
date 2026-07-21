@@ -34,6 +34,21 @@ const sessionSchema = new Schema(
     endReason: { type: String },
     // Cancellation flag returned to the extension on its next PATCH (FR-BE-034).
     cancelRequested: { type: Boolean, default: false },
+    // Monotonic allocator for session-log `seq` (FR-EX-084). Batches reserve a
+    // contiguous range with a single atomic $inc, so concurrent uploads can
+    // never share one.
+    //
+    // DELIBERATELY HAS NO DEFAULT. A default would be applied when hydrating any
+    // document written before this field existed, and Mongoose puts hydration
+    // defaults into the next save()'s $set — even though modifiedPaths() reports
+    // the doc as clean. An unrelated `doc.save()` (e.g. a heartbeat PATCH) would
+    // then reset the counter to 0 mid-flight and hand the next batch a range that
+    // collides with rows already written. With no default, an absent field stays
+    // absent, `$inc` creates it, and a session with no logs correctly starts at 0.
+    //
+    // INVARIANT: only ever mutate this via $inc. Never read-modify-write it
+    // through a hydrated doc.
+    logSeq: { type: Number },
   },
   { timestamps: true },
 );

@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
 export default function Home() {
-  // No dashboard yet — the admin panel starts at sign-in.
-  redirect("/login"); 
-}
+  // Signed-in users are bounced on to /dashboard from the login page.
+  redirect("/login");
+}  

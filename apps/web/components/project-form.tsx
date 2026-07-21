@@ -22,6 +22,10 @@ import { TagInput } from "@/components/tag-input";
 // pre-populated destructive blocklist from the shared safety constants).
 const DEFAULT_CONFIG: CrawlConfig = crawlConfigSchema.parse({});
 
+/** Value to drop back to when "Unlimited" is unticked — the schema's own
+ *  defaults are null now, so unticking needs a concrete finite starting point. */
+const LIMIT_FALLBACK = { maxDepth: 5, maxScreens: 200, maxDurationMin: 30 } as const;
+
 type Errors = Record<string, string>;
 
 const DOMAIN_RE = /^(localhost|(\*\.)?([a-z0-9-]+\.)+[a-z]{2,})(:\d+)?$/i;
@@ -49,6 +53,13 @@ export function ProjectForm({
   function setNum<K extends keyof CrawlConfig>(key: K, raw: string) {
     const n = Number.parseInt(raw, 10);
     setCfg(key, (Number.isNaN(n) ? 0 : n) as CrawlConfig[K]);
+  }
+  /** Limit fields are `number | null` where null = unlimited. Toggling the
+   *  checkbox is the ONLY way to produce null — deliberately, because this form
+   *  is noValidate and an emptied number input parses to 0, so any numeric
+   *  sentinel would let a stray keystroke silently unbound a crawl. */
+  function setLimit(key: "maxDepth" | "maxScreens" | "maxDurationMin", unlimited: boolean) {
+    setCfg(key, unlimited ? null : LIMIT_FALLBACK[key]);
   }
 
   function validate(): ProjectCreate | null {
@@ -213,38 +224,54 @@ export function ProjectForm({
       <section className="card form-section">
         <h2 className="form-section__title">Limits &amp; capture</h2>
         <div className="form-grid">
-          <Field label="Max depth" htmlFor="p-maxdepth" error={err("config.maxDepth")}>
-            <Input
-              id="p-maxdepth"
-              type="number"
-              min={1}
-              max={20}
-              value={config.maxDepth}
-              onChange={(e) => setNum("maxDepth", e.target.value)}
-            />
-          </Field>
-          <Field label="Max screens" htmlFor="p-maxscreens" error={err("config.maxScreens")}>
-            <Input
-              id="p-maxscreens"
-              type="number"
-              min={1}
-              max={5000}
-              value={config.maxScreens}
-              onChange={(e) => setNum("maxScreens", e.target.value)}
-            />
-          </Field>
+          {(
+            [
+              { key: "maxDepth", label: "Max depth", id: "p-maxdepth", min: 1, max: 20 },
+              { key: "maxScreens", label: "Max screens", id: "p-maxscreens", min: 1, max: 5000 },
+              { key: "maxDurationMin", label: "Max duration (min)", id: "p-maxdur", min: 1, max: 240 },
+            ] as const
+          ).map((f) => {
+            const unlimited = config[f.key] === null;
+            return (
+              <Field key={f.key} label={f.label} htmlFor={f.id} error={err(`config.${f.key}`)}>
+                <Input
+                  id={f.id}
+                  type="number"
+                  min={f.min}
+                  max={f.max}
+                  disabled={unlimited}
+                  value={unlimited ? "" : (config[f.key] as number)}
+                  placeholder={unlimited ? "Unlimited" : undefined}
+                  onChange={(e) => setNum(f.key, e.target.value)}
+                />
+                <label className="subtle" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={unlimited}
+                    onChange={(e) => setLimit(f.key, e.target.checked)}
+                  />
+                  Unlimited
+                </label>
+              </Field>
+            );
+          })}
+          {/* FR-EX-033 — the shutter delay. Sites with entrance animations or
+              content that streams in after first paint need a real pause; the
+              stability check only watches the DOM and the network. */}
           <Field
-            label="Max duration (min)"
-            htmlFor="p-maxdur"
-            error={err("config.maxDurationMin")}
+            label="Wait before screenshot (ms)"
+            htmlFor="p-settle"
+            error={err("config.captureSettleMs")}
+            hint="Extra pause after images and fonts finish, before each shot. Raise to 10000–20000 for sites that animate in."
           >
             <Input
-              id="p-maxdur"
+              id="p-settle"
               type="number"
-              min={1}
-              max={240}
-              value={config.maxDurationMin}
-              onChange={(e) => setNum("maxDurationMin", e.target.value)}
+              min={0}
+              max={60000}
+              step={500}
+              value={config.captureSettleMs}
+              onChange={(e) => setNum("captureSettleMs", e.target.value)}
             />
           </Field>
           <Field label="Click delay (ms)" htmlFor="p-clickdelay" error={err("config.clickDelayMs")}>
@@ -332,6 +359,34 @@ export function ProjectForm({
             checked={config.fullPage}
             onChange={(e) => setCfg("fullPage", e.target.checked)}
           />
+        </div>
+        {/* FR-EX-090 */}
+        <div style={{ marginTop: "var(--space-4)" }}>
+          <Checkbox
+            label="Crawl as mobile by default"
+            checked={config.captureMobile}
+            onChange={(e) => setCfg("captureMobile", e.target.checked)}
+          />
+          <p className="subtle" style={{ fontSize: "var(--text-xs)", margin: "var(--space-1) 0 0" }}>
+            Sets the default device for this project&apos;s crawls. A run captures{" "}
+            <strong>one</strong> device, not both: in mobile mode the whole crawl runs at{" "}
+            {config.mobileViewport.width}×{config.mobileViewport.height} with a phone user-agent, so
+            you get the real mobile site — hamburger nav and all — rather than a narrowed desktop
+            one. Chrome shows a &ldquo;being debugged&rdquo; banner for the duration. Run the crawl
+            twice if you want both devices.
+          </p>
+        </div>
+        <div style={{ marginTop: "var(--space-4)" }}>
+          <Checkbox
+            label="Click submit buttons in forms"
+            checked={config.clickSubmitEmptyForms}
+            onChange={(e) => setCfg("clickSubmitEmptyForms", e.target.checked)}
+          />
+          <p className="subtle" style={{ fontSize: "var(--text-xs)", margin: "var(--space-1) 0 0" }}>
+            Off by default. The crawler never fills fields, so clicking a submit sends the form
+            as-is. Turn this on to raise coverage on apps whose buttons sit inside forms — buttons
+            matching the destructive blocklist are never clicked either way.
+          </p>
         </div>
       </section>
 

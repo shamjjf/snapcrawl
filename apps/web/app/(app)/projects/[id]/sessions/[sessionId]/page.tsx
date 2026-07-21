@@ -16,6 +16,7 @@ import {
   StatusChip,
 } from "@/components/ui";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { CoveragePanel } from "@/components/coverage-panel";
 import { useToast } from "@/components/toast";
 import {
   useCancelSession,
@@ -190,15 +191,15 @@ export default function SessionDetailPage() {
           </div>
           <div>
             <dt>Max depth</dt>
-            <dd>{cfg.maxDepth}</dd>
+            <dd>{cfg.maxDepth ?? "Unlimited"}</dd>
           </div>
           <div>
             <dt>Max screens</dt>
-            <dd>{cfg.maxScreens}</dd>
+            <dd>{cfg.maxScreens ?? "Unlimited"}</dd>
           </div>
           <div>
             <dt>Max duration</dt>
-            <dd>{cfg.maxDurationMin} min</dd>
+            <dd>{cfg.maxDurationMin === null ? "Unlimited" : `${cfg.maxDurationMin} min`}</dd>
           </div>
           <div>
             <dt>Viewport</dt>
@@ -220,6 +221,10 @@ export default function SessionDetailPage() {
           </div>
         </dl>
       </section>
+
+      {/* Coverage (FR-AP-031 / FR-BE-051): unique URLs/states, states per depth,
+          dead clicks, duplicate rate — computed from the captured rows. */}
+      <CoveragePanel sessionId={s.id} />
 
       {/* Error / event log (FR-AP-031 / FR-EX-082/084). The extension streams the
           crawl's swallowed failures here, so the log doubles as the error list. */}

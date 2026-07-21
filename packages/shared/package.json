@@ -12,7 +12,6 @@
     "./design/tokens.css": "./src/design/tokens.css"
   },
   "scripts": {
-    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

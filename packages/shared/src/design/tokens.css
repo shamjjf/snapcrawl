@@ -147,7 +147,11 @@
   --status-failed-text: var(--red-700);
   --status-failed-dot: var(--red-600);
   --status-cancelled-bg: var(--slate-100);
-  --status-cancelled-text: var(--slate-500);
+  /* slate-600, not slate-500: the chip is 12px medium, i.e. normal text, so AA
+     wants 4.5:1 and slate-500 gave 4.34:1. Matches --status-pending-text, the
+     other neutral chip on this same bg (6.92:1). The dot stays slate-500 —
+     non-text, so 3:1 applies. */
+  --status-cancelled-text: var(--slate-600);
   --status-cancelled-dot: var(--slate-500);
 
   /* Sitemap graph edge kinds */
@@ -299,7 +303,9 @@
     --status-failed-text: var(--red-300);
     --status-failed-dot: var(--red-400);
     --status-cancelled-bg: var(--slate-800);
-    --status-cancelled-text: var(--slate-subtle-d);
+    /* slate-400 (5.71:1), not slate-subtle-d (4.46:1 — under AA for 12px text).
+       Matches --status-pending-text, the other neutral chip on this bg. */
+    --status-cancelled-text: var(--slate-400);
     --status-cancelled-dot: var(--slate-500);
 
     --edge-navigation: var(--az-400);
@@ -372,7 +378,9 @@
   --status-failed-text: var(--red-300);
   --status-failed-dot: var(--red-400);
   --status-cancelled-bg: var(--slate-800);
-  --status-cancelled-text: var(--slate-subtle-d);
+  /* Keep in step with the prefers-color-scheme block above — if these two dark
+     definitions drift, the theme toggle and the OS preference disagree. */
+  --status-cancelled-text: var(--slate-400);
   --status-cancelled-dot: var(--slate-500);
 
   --edge-navigation: var(--az-400);

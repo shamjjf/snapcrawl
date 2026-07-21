@@ -16,6 +16,16 @@ export const captureMetaSchema = z.object({
   viewport: viewportSchema,
   fullPage: z.boolean().default(false),
   clientTimestamp: z.coerce.date().optional(),
+  /** FR-EX-090 — which rendering this image is. "mobile" rows are the emulated
+   *  phone companion of a desktop capture; they are excluded from the gallery,
+   *  sitemap and coverage by default so those keep counting STATES, not images.
+   *  Absent means desktop, which is why no backfill of existing rows is needed. */
+  variant: z.enum(["desktop", "mobile"]).default("desktop"),
+  /** FR-EX-090 — set on a mobile row when the page did NOT actually re-render at
+   *  phone width (structural signature unchanged after a 3.5× width change and no
+   *  meta viewport). The image is a squeezed desktop layout, not a real mobile
+   *  render, and must be labelled as such rather than presented as genuine. */
+  mobileReflowed: z.boolean().optional(),
 });
 
 /** Presign request: dedupe by contentHash, else hand back a PUT URL (FR-BE-040). */

@@ -28,7 +28,22 @@ const screenSchema = new Schema(
     pHash: { type: String },
     width: { type: Number },
     height: { type: Number },
+    // Stored object sizes, for the dashboard's storage KPI (FR-AP-010). Kept as
+    // two fields rather than a pre-summed total so the capture path and the
+    // thumbnail job can each write their own independently. Absent on rows
+    // predating this — $sum treats missing as 0, so legacy rows just don't count
+    // until the backfill runs.
+    bytes: { type: Number },
+    thumbBytes: { type: Number },
     fullPage: { type: Boolean, default: false },
+    // FR-EX-090 — which rendering this image is. Absent means desktop, which is
+    // why existing rows need no backfill: every exclusion filter uses
+    // { $ne: "mobile" }, and that matches documents where the field is missing.
+    // A "mobile" row's parentScreenId is its DESKTOP twin, by definition.
+    variant: { type: String, enum: ["desktop", "mobile"], default: "desktop" },
+    /** False when the page did not actually re-lay-out at phone width — the image
+     *  is a squeezed desktop layout and the UI must say so. */
+    mobileReflowed: { type: Boolean },
     // Set by near-duplicate detection (FR-BE-043); false until pHash lands.
     isDuplicate: { type: Boolean, default: false },
     capturedAt: { type: Date },
@@ -40,6 +55,8 @@ const screenSchema = new Schema(
 screenSchema.index({ sessionId: 1, fingerprint: 1 }, { unique: true });
 screenSchema.index({ sessionId: 1, contentHash: 1 });
 screenSchema.index({ sessionId: 1, capturedAt: 1 });
+// Backfill/thumbnail worker: find screens still missing a thumbnail.
+screenSchema.index({ thumbKey: 1 });
 
 export type ScreenDoc = HydratedDocument<
   InferSchemaType<typeof screenSchema> & { createdAt: Date; updatedAt: Date }

@@ -40,18 +40,28 @@ export async function clearCaptures(): Promise<void> {
   }
 }
 
-/** Bundle a list of PNG data URLs into a ZIP and download it. */
+/** Bundle a list of PNG data URLs into a ZIP and download it.
+ *
+ *  `mobile` (FR-EX-090) are companion shots keyed by the DESKTOP index they
+ *  belong to, so a phone shot lands next to its desktop twin as
+ *  screen-004-mobile.png. Sparse by design: a state whose mobile shot was
+ *  skipped simply has no entry. */
 export async function downloadDataUrlsZip(
   list: string[],
   filename = "snapcrawl-crawl.zip",
   saveAs = false,
+  mobile: [number, string][] = [],
 ): Promise<void> {
   if (list.length === 0) return;
 
+  const pad = (i: number) => String(i + 1).padStart(3, "0");
   const entries = list.map((dataUrl, i) => ({
-    name: `screen-${String(i + 1).padStart(3, "0")}.png`,
+    name: `screen-${pad(i)}.png`,
     data: dataUrlToBytes(dataUrl),
   }));
+  for (const [seq, dataUrl] of mobile) {
+    entries.push({ name: `screen-${pad(seq)}-mobile.png`, data: dataUrlToBytes(dataUrl) });
+  }
   const bytes = buildZip(entries);
   const blob = new Blob([bytes.buffer as ArrayBuffer], { type: "application/zip" });
   const url = URL.createObjectURL(blob);

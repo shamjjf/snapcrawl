@@ -18,6 +18,8 @@ import {
   Spinner,
   StatusChip,
 } from "@/components/ui";
+import { AuthoriseGate } from "@/components/authorise-gate";
+import { useSession as useAuthSession } from "@/components/session-provider";
 import { useProject, useSessions } from "@/lib/queries";
 import { fmtDateTime, fmtDuration } from "@/lib/format";
 
@@ -34,16 +36,23 @@ export default function SessionsPage() {
   const params = useParams<{ id: string }>();
   const projectId = params.id;
   const project = useProject(projectId);
+  const { user } = useAuthSession();
 
-  const [status, setStatus] = useState("");
+  // "" = no filter. The union (not a loose string) keeps an unsendable status
+  // impossible at compile time — the server 400s anything outside it.
+  const [status, setStatus] = useState<SessionStatus | "">("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
 
-  const query = useSessions(projectId, {
-    status: status || undefined,
-    from: from || undefined,
-    to: to || undefined,
-  });
+  // An inverted range is always empty. Say so, rather than querying and letting
+  // "No sessions match" imply the project has none.
+  const rangeInverted = from !== "" && to !== "" && from > to;
+
+  const query = useSessions(
+    projectId,
+    { status: status || undefined, from: from || undefined, to: to || undefined },
+    { enabled: !rangeInverted },
+  );
   const sessions = query.data?.pages.flatMap((p) => p.items) ?? [];
 
   return (
@@ -56,11 +65,18 @@ export default function SessionsPage() {
 
       <PageHeader title="Sessions" subtitle="Crawl runs for this project." />
 
+      {/* NFR-020: the attestation belongs here, where crawls live — this is the
+          page you open to see or start a run, and the API blocks the first one
+          until it is recorded. */}
+      {project.data ? (
+        <AuthoriseGate project={project.data} canWrite={user.role !== "viewer"} />
+      ) : null}
+
       <div className="filters">
         <Select
           aria-label="Filter by status"
           value={status}
-          onChange={(e) => setStatus(e.target.value)}
+          onChange={(e) => setStatus(e.target.value as SessionStatus | "")}
           style={{ maxWidth: 180 }}
         >
           <option value="">All statuses</option>
@@ -78,7 +94,11 @@ export default function SessionsPage() {
         </Field>
       </div>
 
-      {query.isLoading ? (
+      {rangeInverted ? (
+        <Alert tone="danger">
+          “From” ({from}) is after “To” ({to}), so no session could match. Swap the dates.
+        </Alert>
+      ) : query.isLoading ? (
         <div className="loading-row">
           <Spinner /> Loading sessions…
         </div>

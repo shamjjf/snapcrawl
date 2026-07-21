@@ -12,3 +12,5 @@ export * from "./edge.js";
 export * from "./graph.js";
 export * from "./auth.js";
 export * from "./user.js";
+export * from "./dashboard.js";
+export * from "./audit.js";

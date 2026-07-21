@@ -28,27 +28,27 @@ import {
   downloadDataUrlsZip,
   getCaptures,
 } from "../lib/capture";
-import {
-  configToRunOptions,
-  DEFAULT_MAX_DEPTH,
-  DEFAULT_MAX_MINUTES,
-  DEFAULT_MAX_SCREENS,
-  type CrawlProgress,
-  type CrawlReason,
-} from "../lib/crawl";
+import { configToRunOptions, type CrawlProgress, type CrawlReason } from "../lib/crawl";
 import type { CrawlConfig, Project } from "@snapcrawl/shared";
 import { getCachedProjects, getPairing, getSelectedProjectId, setSelectedProjectId } from "../lib/pairing";
-import { getCrawlShots } from "../lib/capture-sink";
+import { getCrawlMobileShots, getCrawlShots } from "../lib/capture-sink";
 import { getCrawlErrors, type CrawlErrorEntry } from "../lib/error-sink";
 import { effectiveAllowedDomains, isInScope } from "../lib/scope";
 import { requestCrawlAccess } from "../lib/host-access";
-import { swControlCrawl, swGetCrawlStatus, swStartCrawl } from "../lib/messaging";
+import {
+  fetchProjectsViaWorker,
+  swControlCrawl,
+  swGetCrawlStatus,
+  swStartCrawl,
+} from "../lib/messaging";
 
 type RunState = "idle" | SessionStatus;
 
 const REASON_TEXT: Record<CrawlReason, string> = {
   completed: "crawl complete — explored every reachable state",
-  "limit-reached": "budget reached (screens / depth / time)",
+  // Reachable only on a project that still carries a finite limit; unlimited is
+  // the default now, so this is the exception rather than the expected ending.
+  "limit-reached": "stopped at a limit set on the project",
   cancelled: "stopped by you",
   "no-tab": "couldn't crawl this tab",
   error: "ended with an error",
@@ -112,17 +112,18 @@ export function App() {
     errors: 0,
     currentUrl: "",
     phase: "",
+    unreachableRegions: 0,
   });
   const [reason, setReason] = useState<CrawlReason | null>(null);
   const [crawlErr, setCrawlErr] = useState<string | null>(null);
   const [uploadNote, setUploadNote] = useState<string | null>(null);
+  const [abandoned, setAbandoned] = useState(0); // FR-EX-084 — branches given up on
   const shotsRef = useRef<string[]>([]);
   const runStateRef = useRef<RunState>("idle");
   const [overrides, setOverrides] = useState({
-    maxDepth: DEFAULT_MAX_DEPTH,
-    maxScreens: DEFAULT_MAX_SCREENS,
-    maxMinutes: DEFAULT_MAX_MINUTES,
     fullPage: false,
+    proCaptureMode: false, // FR-EX-052
+    captureMode: "desktop" as "desktop" | "mobile", // FR-EX-090
   });
   const [theme, setThemeState] = useState<"light" | "dark">("light");
   const [scan, setScan] = useState<{
@@ -148,18 +149,41 @@ export function App() {
       .catch(() => setActiveTabUrl(""));
     // Load paired projects (FR-EX-002); the selected project's config becomes the
     // run config. Falls back to local defaults when unpaired.
+    // FR-EX-002 — the popup mounts on every icon click, so this runs each time
+    // the extension is opened. Render the CACHED list first so the picker never
+    // flashes empty, then refresh from the backend so projects created AFTER
+    // pairing show up without the user having to re-pair. A failed refresh
+    // (offline, backend down) deliberately keeps the cached list rather than
+    // blanking the picker.
+    let cancelled = false;
+    const pickId = (list: Project[], preferred: string): string =>
+      preferred && list.some((p) => p.id === preferred) ? preferred : (list[0]?.id ?? "");
     void (async () => {
       const [pairing, cached, storedId] = await Promise.all([
         getPairing(),
         getCachedProjects(),
         getSelectedProjectId(),
       ]);
+      if (cancelled) return;
       setPaired(!!pairing);
       setProjects(cached);
-      const id = storedId && cached.some((p) => p.id === storedId) ? storedId : cached[0]?.id ?? "";
-      setSelectedId(id);
-      applyProjectConfig(cached.find((p) => p.id === id) ?? null);
+      const cachedId = pickId(cached, storedId ?? "");
+      setSelectedId(cachedId);
+      applyProjectConfig(cached.find((p) => p.id === cachedId) ?? null);
+
+      if (!pairing) return; // unpaired: nothing to refresh against
+      const fresh = await fetchProjectsViaWorker().catch(() => null);
+      if (cancelled || !fresh || !fresh.ok) return;
+      setProjects(fresh.projects);
+      // Keep the user's stored choice if it still exists; otherwise fall back to
+      // the first project (e.g. the selected one was deleted in the panel).
+      const freshId = pickId(fresh.projects, storedId ?? "");
+      setSelectedId(freshId);
+      applyProjectConfig(fresh.projects.find((p) => p.id === freshId) ?? null);
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Keep the active-tab URL fresh so the Start-gate never goes stale if the tab
@@ -184,10 +208,17 @@ export function App() {
     setActiveConfig(proj?.config ?? null);
     if (proj?.config) {
       setOverrides({
-        maxDepth: proj.config.maxDepth,
-        maxScreens: proj.config.maxScreens,
-        maxMinutes: proj.config.maxDurationMin,
+        // Seeded from the project now that scroll-and-stitch (FR-EX-051) and pro
+        // capture (FR-EX-052) both exist — a project that turns either on defaults
+        // the run toggle on, and the user can still flip it off for this run.
+        // The three limits are NOT seeded here any more: a crawl runs until the
+        // user stops it, and re-seeding a project's ceiling on every project
+        // switch is what used to make an "unlimited" run stop at 200.
         fullPage: proj.config.fullPage,
+        proCaptureMode: proj.config.proCaptureMode,
+        // FR-EX-090 — a project that defaults to mobile starts the picker there;
+        // the user can still switch this run.
+        captureMode: proj.config.captureMobile ? ("mobile" as const) : ("desktop" as const),
       });
     }
   }
@@ -294,6 +325,7 @@ export function App() {
       if (s.progress) setProg(s.progress);
       if (s.result) {
         setReason(s.result.reason);
+        setAbandoned(s.result.abandoned);
         if (s.result.error) setCrawlErr(s.result.error);
         if (s.result.sessionId && s.result.uploaded > 0) {
           setUploadNote(
@@ -333,10 +365,11 @@ export function App() {
 
   function start() {
     setElapsed(0);
-    setProg({ screens: 0, states: 0, depth: 0, queue: 0, pages: 0, errors: 0, currentUrl: "", phase: "" });
+    setProg({ screens: 0, states: 0, depth: 0, queue: 0, pages: 0, errors: 0, currentUrl: "", phase: "", unreachableRegions: 0 });
     setReason(null);
     setCrawlErr(null);
     setUploadNote(null);
+    setAbandoned(0);
     shotsRef.current = [];
     setRunState("running");
 
@@ -344,31 +377,31 @@ export function App() {
       ...configToRunOptions(activeConfig, overrides, safetyOn),
       // Paired ⇒ create a backend session and upload captures (FR-EX-011/081).
       projectId: paired && selectedId ? selectedId : undefined,
-      sessionOverrides: {
-        maxDepth: overrides.maxDepth,
-        maxScreens: overrides.maxScreens,
-        fullPage: overrides.fullPage,
-      },
+      // No limit overrides: the run is unbounded and the project config is the
+      // only thing that can bound it. Sending a limit here would only ever
+      // tighten the run back down.
+      sessionOverrides: { fullPage: overrides.fullPage },
       allowedDomains: projectDomains, // FR-EX-010/071 scope
     };
     // Crawl the user's CURRENT tab in place — no separate window.
     const startUrl = activeTabUrl || activeProject?.baseUrl || "";
 
-    // FR-EX-011/015 — acquire Chrome host access for the crawl's origins IN THIS
-    // USER GESTURE (the SW has no gesture and can't prompt). request() only
-    // prompts if not already granted. On deny: abort. swStartCrawl needs no
-    // gesture, so resolving the active tab after the grant is fine.
+    // FR-EX-011/015 — acquire Chrome host access IN THIS USER GESTURE (the SW has
+    // no gesture and can't prompt). request() only prompts if not already granted.
+    // On deny: abort. swStartCrawl needs no gesture, so resolving the active tab
+    // after the grant is fine.
+    //
+    // Chrome asks for all sites here, not just this one: captureVisibleTab accepts
+    // only `<all_urls>` or `activeTab`, and a crawl can hold neither per-origin nor
+    // activeTab across its own navigations. Without it the crawl runs and captures
+    // nothing. The crawl itself still can't leave allowedDomains (FR-EX-010/071).
     void requestCrawlAccess(startUrl, projectDomains)
       .then(async (granted) => {
         if (!granted) {
           setRunState("failed");
-          let host = "";
-          try {
-            host = new URL(startUrl).hostname;
-          } catch {
-            /* ignore */
-          }
-          setCrawlErr(`Grant SnapCrawl access to ${host || "this site"} to crawl it.`);
+          setCrawlErr(
+            "SnapCrawl needs access to take screenshots — Chrome asks for all sites because its capture API accepts nothing narrower. The crawl still only visits this project's allowed domains.",
+          );
           return;
         }
         // The SW drives THIS tab in place, so hand it the tab the user is on.
@@ -407,7 +440,9 @@ export function App() {
     shotsRef.current = shots;
     if (shots.length === 0) return;
     try {
-      await downloadDataUrlsZip(shots, "snapcrawl-crawl.zip", true);
+      // FR-EX-090 — mobile companions ride along, named after their desktop twin.
+      const mobile = await getCrawlMobileShots();
+      await downloadDataUrlsZip(shots, "snapcrawl-crawl.zip", true, mobile);
     } catch {
       setCrawlErr("ZIP download failed.");
     }
@@ -488,6 +523,22 @@ export function App() {
       {/* Live progress (running / paused) */}
       {active && (
         <Card style={{ padding: "var(--space-3)", display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+          {/* The count is the headline — there is no ceiling to show it against.
+              Elapsed rides in this row so the secondary grid below keeps an even
+              number of tiles once Depth is gone. */}
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "var(--space-2)" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)" }}>
+              <span style={{ fontSize: "var(--text-2xl)", fontWeight: 600, lineHeight: 1 }}>
+                {prog.screens}
+              </span>
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                screens captured
+              </span>
+            </div>
+            <span className="mono" style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+              {fmtElapsed(elapsed)}
+            </span>
+          </div>
           <div
             style={{
               display: "grid",
@@ -495,14 +546,13 @@ export function App() {
               gap: "var(--space-2)",
             }}
           >
-            <StatTile label="Screens" value={`${prog.screens} / ${overrides.maxScreens}`} />
             <StatTile label="States" value={prog.states} />
-            <StatTile label="Depth" value={`${prog.depth} / ${overrides.maxDepth}`} />
             <StatTile label="Queue" value={prog.queue} />
-            <StatTile label="Elapsed" value={fmtElapsed(elapsed)} />
             <StatTile label="Errors" value={prog.errors} danger={prog.errors > 0} />
+            {/* FR-EX-023 — cross-origin / too-deep iframe regions the crawl can't see into. */}
+            <StatTile label="Skipped frames" value={prog.unreachableRegions} />
           </div>
-          <Field label="Current URL">
+          <Field label="Current screen">
             <span className="mono truncate" style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
               {currentUrl}
             </span>
@@ -510,7 +560,7 @@ export function App() {
           <Pill tone="warning">
             {paused
               ? "paused — resume to continue"
-              : "crawling this tab — don't switch tabs or type here until it's done"}
+              : "crawling this tab — runs until you press Stop; don't switch tabs or type here"}
           </Pill>
         </Card>
       )}
@@ -521,7 +571,15 @@ export function App() {
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
             <StatusChip status={runState} />
             <span className="subtle" style={{ fontSize: "var(--text-xs)" }}>
-              {reason ? REASON_TEXT[reason] : "run ended"}
+              {/* "explored every reachable state" is only true if nothing was
+                  abandoned. Saying it after giving up on branches reads as
+                  "your site is 2 pages", which is how a broken crawl looked
+                  like a finished one (FR-EX-084). */}
+              {reason === "completed" && abandoned > 0
+                ? `stopped — ${abandoned} branch${abandoned === 1 ? "" : "es"} could not be re-reached, so parts of the site were never explored`
+                : reason
+                  ? REASON_TEXT[reason]
+                  : "run ended"}
             </span>
           </div>
           <div style={{ display: "flex", gap: "var(--space-4)", fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>
@@ -542,6 +600,16 @@ export function App() {
           ) : (
             <Pill tone="warning">No screenshots captured.</Pill>
           )}
+          {/* FR-EX-084 — a run that gave up on branches still ends "completed",
+              which reads as "that's the whole site". Say otherwise, in the one
+              place the user actually looks. */}
+          {abandoned > 0 ? (
+            <Pill tone="warning">
+              Gave up on {abandoned} branch{abandoned === 1 ? "" : "es"} — couldn&apos;t get back to
+              {abandoned === 1 ? " it" : " them"}, so parts of the site went unexplored. See View
+              errors.
+            </Pill>
+          ) : null}
           {uploadNote && <Pill tone="info">{uploadNote}</Pill>}
           {crawlErr && (
             <span className="subtle" style={{ fontSize: "var(--text-xs)", color: "var(--color-danger)" }}>
@@ -623,56 +691,22 @@ export function App() {
       {/* Per-run overrides (editable only when idle) */}
       {runState === "idle" && (
         <Card style={{ padding: "var(--space-3)", display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-          <div className="section-label">Run overrides</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--space-3)" }}>
-            <Field label="Max depth" htmlFor="maxDepth">
-              <Input
-                id="maxDepth"
-                type="number"
-                min={1}
-                max={20}
-                value={overrides.maxDepth}
-                onChange={(e) =>
-                  setOverrides((o) => ({
-                    ...o,
-                    maxDepth: Math.max(1, Number(e.target.value) || DEFAULT_MAX_DEPTH),
-                  }))
-                }
-              />
-            </Field>
-            <Field label="Max screens" htmlFor="maxScreens">
-              <Input
-                id="maxScreens"
-                type="number"
-                min={1}
-                max={2000}
-                value={overrides.maxScreens}
-                onChange={(e) =>
-                  setOverrides((o) => ({
-                    ...o,
-                    maxScreens: Math.max(1, Number(e.target.value) || DEFAULT_MAX_SCREENS),
-                  }))
-                }
-              />
-            </Field>
-            <Field label="Max minutes" htmlFor="maxMinutes">
-              <Input
-                id="maxMinutes"
-                type="number"
-                min={0}
-                max={120}
-                value={overrides.maxMinutes}
-                onChange={(e) =>
-                  setOverrides((o) => ({ ...o, maxMinutes: Math.max(0, Number(e.target.value) || 0) }))
-                }
-              />
-            </Field>
-          </div>
+          <div className="section-label">Capture options</div>
+          {/* The Max depth / Max screens / Max minutes inputs are gone: a crawl
+              runs until you press Stop. Depth is still tracked internally (capture
+              metadata, the sitemap's parent/child edges, the panel) — it is just
+              not something the extension asks you to set or shows you. */}
+          {/* FR-EX-051 — full-page scroll-and-stitch now exists (the engine walks
+              the page a viewport at a time, hides sticky chrome on intermediate
+              segments, and stitches on an OffscreenCanvas), so the toggle is real
+              again. Off by default: it is several captures per state and much
+              slower, and viewport shots are the common case. */}
           <label
             style={{
               display: "flex",
               alignItems: "center",
               gap: "var(--space-2)",
+              marginTop: "var(--space-3)",
               fontSize: "var(--text-sm)",
               color: "var(--color-text)",
             }}
@@ -680,10 +714,78 @@ export function App() {
             <Toggle
               checked={overrides.fullPage}
               onChange={(v) => setOverrides((o) => ({ ...o, fullPage: v }))}
-              aria-label="Full-page capture"
+              aria-label="Full-page capture — scroll and stitch"
             />
-            Full-page capture (scroll &amp; stitch)
+            Full-page capture (scroll &amp; stitch, up to 10 segments)
           </label>
+          {/* FR-EX-052 — pro (CDP) full-page capture. The debugger banner is
+              disclosed below (C-02) — never hidden. */}
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+              marginTop: "var(--space-2)",
+              fontSize: "var(--text-sm)",
+              color: "var(--color-text)",
+            }}
+          >
+            <Toggle
+              checked={overrides.proCaptureMode}
+              onChange={(v) => setOverrides((o) => ({ ...o, proCaptureMode: v }))}
+              aria-label="Pro capture — pixel-perfect full-page via the debugger"
+            />
+            Pro capture (pixel-perfect full-page, CDP)
+          </label>
+          {overrides.proCaptureMode && (
+            <Pill tone="warning">
+              Pro capture shows a Chrome “extension is debugging this browser”
+              banner while each screenshot is taken. It falls back to
+              scroll-and-stitch if the debugger can’t attach (e.g. DevTools is open).
+            </Pill>
+          )}
+          {/* FR-EX-090 — ONE device per run. Crawling as a phone means the whole
+              crawl is a phone: the mobile nav, the mobile-only flows, the mobile
+              screenshots. Run it twice if you want both. */}
+          <div style={{ marginTop: "var(--space-3)" }}>
+            <div className="section-label" style={{ marginBottom: "var(--space-2)" }}>
+              Capture as
+            </div>
+            <div style={{ display: "flex", gap: "var(--space-2)" }}>
+              {(
+                [
+                  { key: "desktop", label: "Desktop" },
+                  {
+                    key: "mobile",
+                    label: `Mobile ${activeConfig?.mobileViewport.width ?? 430}×${activeConfig?.mobileViewport.height ?? 932}`,
+                  },
+                ] as const
+              ).map((m) => {
+                const on = overrides.captureMode === m.key;
+                return (
+                  <button
+                    key={m.key}
+                    type="button"
+                    onClick={() => setOverrides((o) => ({ ...o, captureMode: m.key }))}
+                    aria-pressed={on}
+                    style={{
+                      flex: 1,
+                      padding: "var(--space-2)",
+                      fontSize: "var(--text-sm)",
+                      borderRadius: "var(--radius-sm)",
+                      cursor: "pointer",
+                      border: `1px solid ${on ? "var(--color-accent)" : "var(--color-border)"}`,
+                      background: on ? "var(--color-accent-soft)" : "transparent",
+                      color: on ? "var(--color-text)" : "var(--color-text-muted)",
+                      fontWeight: on ? 600 : 400,
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </Card>
       )}
 
@@ -735,9 +837,7 @@ export function App() {
       {runState === "idle" && (
         <p className="subtle" style={{ margin: 0, fontSize: "var(--text-xs)" }}>
           BFS-crawls <strong>this tab in place</strong> — don't switch tabs or type here while it
-          runs. Up to {overrides.maxScreens} screens · depth {overrides.maxDepth} ·{" "}
-          {overrides.maxMinutes > 0 ? `${overrides.maxMinutes} min` : "no time limit"}{" "}
-          (FR-EX-011/030/050).
+          runs. <strong>Runs until you press Stop</strong> (FR-EX-011/030/050).
         </p>
       )}
 

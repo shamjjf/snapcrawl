@@ -8,13 +8,21 @@ import {
 } from "@snapcrawl/shared";
 import { ApiError } from "../../http/envelope";
 import { asyncHandler, idParam, parseInput, requireUser } from "../../http/validate";
+import { inc, terminalCounter } from "../../lib/metrics";
 import { publishSessionEvent } from "../../lib/sessionEvents";
 import type { ExtRequest } from "../../middleware/extAuth";
 import { ProjectModel } from "../../models/project";
 import { SessionModel } from "../../models/session";
 import { SessionLogModel } from "../../models/sessionLog";
-import { visibilityFilter } from "../projects/service";
-import { buildSessionLogDocs, canTransition, isTerminal, serializeSession, snapshotConfig } from "./service";
+import { isAuthorisedForUse, visibilityFilter } from "../projects/service";
+import {
+  buildSessionLogDocs,
+  canTransition,
+  isTerminal,
+  reservedBase,
+  serializeSession,
+  snapshotConfig,
+} from "./service";
 
 // POST /ext/sessions — create with an immutable config snapshot (FR-BE-030).
 export const createSession = asyncHandler(async (req: ExtRequest, res: Response) => {
@@ -22,6 +30,18 @@ export const createSession = asyncHandler(async (req: ExtRequest, res: Response)
   const body = parseInput(sessionCreateSchema, req.body);
   const project = await ProjectModel.findOne({ _id: body.projectId, ...visibilityFilter(user) });
   if (!project) throw new ApiError(404, "NOT_FOUND", "Project not found.");
+
+  // The authorised-use gate (NFR-020, C-07). This is the last point before a
+  // crawler starts clicking real buttons on a real site, and the one place the
+  // "I am allowed to test this" attestation can actually be enforced — so a
+  // project nobody has attested for cannot be crawled, whatever token asks.
+  if (!isAuthorisedForUse(project)) {
+    throw new ApiError(
+      403,
+      "AUTHORISED_USE_REQUIRED",
+      "Confirm you own or are authorised to test this target before crawling it.",
+    );
+  }
 
   const base = crawlConfigSchema.parse(project.toObject().config);
   const doc = await SessionModel.create({
@@ -58,8 +78,19 @@ export const updateSession = asyncHandler(async (req: ExtRequest, res: Response)
       );
     }
     doc.status = body.status;
-    if (body.status === "running" && !doc.startedAt) doc.startedAt = new Date();
-    if (isTerminal(body.status)) doc.endedAt = new Date();
+    if (body.status === "running" && !doc.startedAt) {
+      doc.startedAt = new Date();
+      // "Started" = the FIRST time it began running (guarded by !startedAt), so a
+      // paused→running resume doesn't inflate the count (NFR-022).
+      inc("sessions_started_total");
+    }
+    if (isTerminal(body.status)) {
+      doc.endedAt = new Date();
+      const counter = terminalCounter(body.status);
+      // Guarded by canTransition above: a session reaches a terminal state at
+      // most once, so this counts each outcome exactly once.
+      if (counter) inc(counter);
+    }
   }
 
   if (body.stats) {
@@ -79,17 +110,28 @@ export const updateSession = asyncHandler(async (req: ExtRequest, res: Response)
 
 // POST /ext/logs — batched session-log ingest (FR-EX-082/084). The extension
 // uploads error (and, later, decision) lines for the panel's session log
-// (FR-AP-031). `seq` is assigned server-side, continuing from the session's
-// current line count so ordering is stable across batches and SW resumes.
+// (FR-AP-031). `seq` is assigned server-side.
 export const uploadLogs = asyncHandler(async (req: ExtRequest, res: Response) => {
   const user = requireUser(req);
   const body = parseInput(sessionLogBatchSchema, req.body);
 
-  const session = await SessionModel.findOne({ _id: body.sessionId, userId: user.id });
-  if (!session) throw new ApiError(404, "NOT_FOUND", "Session not found.");
+  // Reserve a contiguous seq range ATOMICALLY. The $inc both authorises (via
+  // the userId filter) and allocates in one statement, so two concurrent
+  // batches can never be handed the same range — the count-then-insert this
+  // replaces let them silently collide. Same claim idiom as the refresh-token
+  // rotation in modules/auth/service.ts.
+  const claimed = await SessionModel.findOneAndUpdate(
+    { _id: body.sessionId, userId: user.id },
+    { $inc: { logSeq: body.logs.length } },
+    { new: true, projection: { logSeq: 1 } },
+  );
+  if (!claimed) throw new ApiError(404, "NOT_FOUND", "Session not found.");
 
-  const base = await SessionLogModel.countDocuments({ sessionId: session._id });
-  const docs = buildSessionLogDocs(session._id, base, body.logs, new Date());
+  // `$inc` creates the field when absent, and `new:true` returns the value
+  // AFTER incrementing, so this is always a number even on a session that
+  // predates logSeq. A `?? 0` here would mask a real bug rather than fix one.
+  const base = reservedBase(claimed.logSeq!, body.logs.length);
+  const docs = buildSessionLogDocs(claimed._id, base, body.logs, new Date());
 
   const inserted = await SessionLogModel.insertMany(docs, { ordered: false });
   res.status(201).json({ recorded: inserted.length });
