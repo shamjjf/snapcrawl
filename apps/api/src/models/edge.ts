@@ -28,7 +28,6 @@ const edgeSchema = new Schema(
   { timestamps: true },
 );
 
-edgeSchema.index({ sessionId: 1 });
 // Idempotency (FR-BE-045): one edge per (session, from, to, selector, kind).
 edgeSchema.index(
   { sessionId: 1, fromScreenId: 1, toScreenId: 1, "element.selector": 1, kind: 1 },
