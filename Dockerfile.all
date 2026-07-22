@@ -41,6 +41,8 @@ RUN npm run build -w apps/web && chown -R node:node /app/apps/web/.next
 EXPOSE 3000 4000
 
 USER node
+# PORT is pinned inline: the panel owns 3000 and the API must stay on 4000 —
+# a stray PORT env var on the service must not be able to collide them.
 CMD ["node_modules/.bin/concurrently", "-k", "-n", "api,web", \
-     "node_modules/.bin/tsx apps/api/src/index.ts", \
+     "PORT=4000 node_modules/.bin/tsx apps/api/src/index.ts", \
      "npm run start -w apps/web"]
