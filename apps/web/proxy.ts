@@ -68,6 +68,9 @@ export function proxy(req: NextRequest) {
 export const config = {
   // Everything except Next internals, the favicon, and static assets. `/` is
   // excluded too: app/page.tsx already redirects it to /login, so gating it
-  // would only add a hop.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$|$).*)"],
+  // would only add a hop. `api/` is excluded because in single-domain deploys
+  // the next.config rewrites proxy /api/v1/* to the API on this same origin —
+  // those are bearer-authenticated data requests the API itself guards
+  // (FR-AP-072); redirecting them to /login turns a fetch into a 405.
+  matcher: ["/((?!api/|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$|$).*)"],
 };
